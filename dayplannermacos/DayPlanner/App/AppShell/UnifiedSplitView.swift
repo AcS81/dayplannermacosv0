@@ -21,7 +21,8 @@ struct UnifiedSplitView: View {
                     selectedDate: $selectedDate,
                     showingMonthView: $showingMonthView
                 )
-                .frame(width: showingMindPanel ? 500 : .infinity)
+                .frame(width: showingMindPanel ? 500 : nil, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 
                 
                 // Spacer to push everything to the left
@@ -97,4 +98,3 @@ struct LiquidGlassSeparator: View {
             )
     }
 }
-

@@ -5,11 +5,13 @@ import SwiftUI
 struct CalendarPanel: View {
     @EnvironmentObject private var dataManager: AppDataManager
     @EnvironmentObject private var aiService: AIService
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var selectedDate: Date
     @Binding var showingMonthView: Bool
     @State private var showingTodoList = false // Default to hiding todo list
     @State private var showingRecommendations = true
     @State private var ghostSuggestions: [Suggestion] = []
+    @State private var ghostAcceptanceInfo: GhostAcceptanceInfo?
     
     var body: some View {
         VStack(spacing: 0) {
@@ -20,6 +22,7 @@ struct CalendarPanel: View {
                 showingRecommendations: $showingRecommendations,
                 showingTodoList: $showingTodoList,
                 ghostCount: ghostSuggestions.count,
+                showBadges: dataManager.appState.preferences.showRecommendationBadges,
                 isDefaultMonthView: true, // Month view is shown by default
                 onBackToCalendar: {
                     // Return to monthly calendar view
@@ -76,7 +79,7 @@ struct CalendarPanel: View {
                     .animation(.spring(response: 0.6, dampingFraction: 0.8), value: showingTodoList)
             }
         }
-        .padding(.bottom, 96)
+        .padding(.bottom, 140)
         .background(.ultraThinMaterial.opacity(0.5), in: RoundedRectangle(cornerRadius: 16))
         .overlay(
             RoundedRectangle(cornerRadius: 16)
@@ -86,9 +89,40 @@ struct CalendarPanel: View {
         .padding(.trailing, 4)
         .padding(.vertical, 12)
         .overlay(alignment: .bottom) {
-            CalendarChatBar()
-                .padding(.horizontal, 32)
-                .padding(.bottom, 18)
+            VStack(spacing: 12) {
+                if let info = ghostAcceptanceInfo {
+                    GhostAcceptanceBar(
+                        totalCount: info.totalCount,
+                        selectedCount: info.selectedCount,
+                        onAcceptAll: info.acceptAll,
+                        onAcceptSelected: info.acceptSelected
+                    )
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                CalendarChatBar()
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            .padding(.horizontal, 32)
+            .padding(.bottom, 18)
+        }
+        .onPreferenceChange(GhostAcceptancePreferenceKey.self) { info in
+            if reduceMotion {
+                ghostAcceptanceInfo = info
+            } else {
+                withAnimation(.spring(response: 0.6, dampingFraction: 0.85)) {
+                    ghostAcceptanceInfo = info
+                }
+            }
+        }
+        .onChange(of: showingRecommendations) { _, enabled in
+            if !enabled {
+                ghostAcceptanceInfo = nil
+            }
+        }
+        .onChange(of: showingMonthView) { _, isMonth in
+            if isMonth {
+                ghostAcceptanceInfo = nil
+            }
         }
     }
 }

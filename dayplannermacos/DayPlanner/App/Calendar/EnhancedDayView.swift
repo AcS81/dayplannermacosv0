@@ -2,9 +2,32 @@
 
 import SwiftUI
 
+struct GhostAcceptanceInfo: Equatable {
+    let totalCount: Int
+    let selectedCount: Int
+    let acceptAll: () -> Void
+    let acceptSelected: () -> Void
+    
+    static func == (lhs: GhostAcceptanceInfo, rhs: GhostAcceptanceInfo) -> Bool {
+        return lhs.totalCount == rhs.totalCount && lhs.selectedCount == rhs.selectedCount
+    }
+}
+
+struct GhostAcceptancePreferenceKey: PreferenceKey {
+    static var defaultValue: GhostAcceptanceInfo? = nil
+    static func reduce(value: inout GhostAcceptanceInfo?, nextValue: () -> GhostAcceptanceInfo?) {
+        if let update = nextValue() {
+            value = update
+        } else {
+            value = nil
+        }
+    }
+}
+
 struct EnhancedDayView: View {
     @EnvironmentObject private var dataManager: AppDataManager
     @EnvironmentObject private var aiService: AIService
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding private var selectedDate: Date
     @Binding private var ghostSuggestions: [Suggestion]
     @Binding private var showingRecommendations: Bool
@@ -13,6 +36,7 @@ struct EnhancedDayView: View {
     @State private var draggedBlock: TimeBlock?
     @State private var selectedGhostIDs: Set<UUID> = []
     @State private var refreshTask: Task<Void, Never>? = nil
+    @State private var diagnosticsOverride = false
     
     // Constants for precise timeline sizing
     private let minuteHeight: CGFloat = 1.0 // 1 pixel per minute = perfect precision
@@ -58,24 +82,16 @@ struct EnhancedDayView: View {
                 )
                 .padding(.trailing, 2)
                 .padding(.bottom, ghostAcceptanceInset)
+                .background(
+                    Color.clear.preference(key: GhostAcceptancePreferenceKey.self, value: acceptanceInfo)
+                )
             }
             .scrollIndicators(.hidden)
             .scrollDisabled(draggedBlock != nil) // Disable scroll when dragging an event
         }
-        .overlay(alignment: .bottom) {
-            if showingRecommendations && !ghostSuggestions.isEmpty {
-                GhostAcceptanceBar(
-                    totalCount: ghostSuggestions.count,
-                    selectedCount: selectedGhostIDs.count,
-                    onAcceptAll: acceptAllGhosts,
-                    onAcceptSelected: acceptSelectedGhosts
-                )
-                .padding(.horizontal, 24)
-                .padding(.bottom, 12)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-        }
         .onChange(of: selectedDate) { oldValue, newValue in
+            diagnosticsOverride = false
+            dataManager.diagnosticsGhostOverrideActive = false
             dataManager.switchToDay(newValue)
             Task { @MainActor in
                 await refreshGhosts(force: true)
@@ -90,12 +106,47 @@ struct EnhancedDayView: View {
         .onDisappear {
             stopGhostRefresh()
         }
-        .onChange(of: showingRecommendations) { isEnabled in
+        .onChange(of: showingRecommendations) { _, isEnabled in
             if isEnabled {
                 startGhostRefresh(force: true)
             } else {
                 stopGhostRefresh()
                 selectedGhostIDs.removeAll()
+                diagnosticsOverride = false
+                dataManager.diagnosticsGhostOverrideActive = false
+            }
+        }
+        .onChange(of: dataManager.appState.preferences.autoRefreshRecommendations) { _, newValue in
+            if showingRecommendations {
+                if newValue {
+                    startGhostRefresh(force: true)
+                } else {
+                    stopGhostRefresh()
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .diagnosticsSpawnGhosts)) { notification in
+            guard let count = notification.userInfo?["count"] as? Int, count > 0 else { return }
+            diagnosticsOverride = true
+            dataManager.diagnosticsGhostOverrideActive = true
+            stopGhostRefresh()
+            selectedGhostIDs.removeAll()
+            let diagnosticsSuggestions = makeDiagnosticsSuggestions(count: count)
+            if reduceMotion {
+                ghostSuggestions = diagnosticsSuggestions
+            } else {
+                withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+                    ghostSuggestions = diagnosticsSuggestions
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .diagnosticsClearGhosts)) { _ in
+            diagnosticsOverride = false
+            dataManager.diagnosticsGhostOverrideActive = false
+            ghostSuggestions.removeAll()
+            selectedGhostIDs.removeAll()
+            if showingRecommendations {
+                startGhostRefresh(force: true)
             }
         }
         .sheet(isPresented: $showingBlockCreation) {
@@ -120,7 +171,37 @@ struct EnhancedDayView: View {
     }
 
     private var ghostAcceptanceInset: CGFloat {
-        (showingRecommendations && !ghostSuggestions.isEmpty) ? 96 : 24
+        (showingRecommendations && !ghostSuggestions.isEmpty) ? 168 : 24
+    }
+
+    private var acceptanceInfo: GhostAcceptanceInfo? {
+        guard showingRecommendations && !ghostSuggestions.isEmpty else { return nil }
+        return GhostAcceptanceInfo(
+            totalCount: ghostSuggestions.count,
+            selectedCount: selectedGhostIDs.count,
+            acceptAll: acceptAllGhosts,
+            acceptSelected: acceptSelectedGhosts
+        )
+    }
+
+    private func makeDiagnosticsSuggestions(count: Int) -> [Suggestion] {
+        let calendar = Calendar.current
+        let dayStart = calendar.startOfDay(for: selectedDate)
+        let baseDuration: TimeInterval = 45 * 60
+        let spacing: TimeInterval = 60 * 60
+        return (0..<count).map { index in
+            let start = dayStart.addingTimeInterval(TimeInterval(index) * spacing)
+            return Suggestion(
+                title: "Perf Test Block \(index + 1)",
+                duration: baseDuration,
+                suggestedTime: start,
+                energy: .daylight,
+                emoji: "⚙️",
+                explanation: "Diagnostics sample suggestion",
+                confidence: 0.9,
+                weight: Double.random(in: 0.2...0.95)
+            )
+        }
     }
 
     private func toggleGhostSelection(_ suggestion: Suggestion) {
@@ -137,6 +218,14 @@ struct EnhancedDayView: View {
 private extension EnhancedDayView {
     func startGhostRefresh(force: Bool = false) {
         stopGhostRefresh()
+        guard showingRecommendations else { return }
+        guard !diagnosticsOverride else { return }
+        guard dataManager.appState.preferences.autoRefreshRecommendations else {
+            Task { @MainActor in
+                await refreshGhosts(force: force)
+            }
+            return
+        }
         refreshTask = Task { @MainActor in
             let initialReason = dataManager.consumePendingMicroUpdate()
             await refreshGhosts(force: force, reason: initialReason)
@@ -156,14 +245,19 @@ private extension EnhancedDayView {
     @MainActor
     func refreshGhosts(force: Bool = false, reason: MicroUpdateReason? = nil) async {
         guard showingRecommendations else { return }
+        guard !diagnosticsOverride else { return }
         let rawSuggestions = await generateGhostSuggestions(for: selectedDate, reason: reason, forceLLM: force)
         var placedSuggestions = dataManager.prioritizeSuggestions(rawSuggestions)
         assignTimes(to: &placedSuggestions, for: selectedDate)
         placedSuggestions = normalizeSuggestions(placedSuggestions)
         placedSuggestions.sort { $0.suggestedTime < $1.suggestedTime }
         if force || shouldUpdateGhosts(current: ghostSuggestions, new: placedSuggestions) {
-            withAnimation(.spring(response: 0.6, dampingFraction: 0.85)) {
+            if reduceMotion {
                 ghostSuggestions = placedSuggestions
+            } else {
+                withAnimation(.spring(response: 0.6, dampingFraction: 0.85)) {
+                    ghostSuggestions = placedSuggestions
+                }
             }
             let validIDs = Set(placedSuggestions.map(\.id))
             selectedGhostIDs = selectedGhostIDs.intersection(validIDs)
@@ -196,21 +290,50 @@ private extension EnhancedDayView {
         var gaps = computeGaps(for: date)
         guard !gaps.isEmpty else { return }
         let isToday = Calendar.current.isDate(date, inSameDayAs: Date())
+        let minimumDuration: TimeInterval = 600
+
         for index in suggestions.indices {
-            guard let gapIndex = gaps.firstIndex(where: { $0.duration >= suggestions[index].duration }) ?? gaps.indices.first else {
+            let desiredDuration = max(minimumDuration, suggestions[index].duration)
+            let primaryMatch = gaps.enumerated().first { _, gap in gap.duration >= desiredDuration }
+            let fallbackMatch = gaps.enumerated().first { _, gap in gap.duration >= minimumDuration }
+            guard let gapIndex = (primaryMatch ?? fallbackMatch)?.offset else {
+                break
+            }
+
+            var gap = gaps[gapIndex]
+            guard gap.duration >= minimumDuration else {
+                gaps.remove(at: gapIndex)
                 continue
             }
+
             var suggestion = suggestions[index]
-            var gap = gaps[gapIndex]
-            if suggestion.duration > gap.duration {
-                suggestion.duration = max(gap.duration - 120, 600) // leave small buffer, minimum 10 min
-            }
             let anchorStart = isToday ? max(gap.start, Date()) : gap.start
-            let startTime = snapToNearestFiveMinutes(anchorStart)
+            var startTime = snapUpToNearestFiveMinutes(anchorStart)
+            if startTime < gap.start {
+                startTime = gap.start
+            }
+            if startTime >= gap.end {
+                gaps.remove(at: gapIndex)
+                continue
+            }
+
+            let available = gap.end.timeIntervalSince(startTime)
+            guard available >= minimumDuration else {
+                gaps.remove(at: gapIndex)
+                continue
+            }
+
+            let buffer: TimeInterval = available >= minimumDuration + 120 ? 120 : 0
+            let maxDuration = min(gap.duration, max(gap.duration - buffer, minimumDuration))
+            let adjustedDuration = min(maxDuration, suggestion.duration)
+            let finalDuration = max(min(adjustedDuration, available - buffer), minimumDuration)
+
+            suggestion.duration = min(finalDuration, available)
             suggestion.suggestedTime = startTime
             suggestions[index] = suggestion
-            let consumptionEnd = startTime.addingTimeInterval(suggestion.duration + 60)
-            if consumptionEnd < gap.end - 600 {
+
+            let consumptionEnd = startTime.addingTimeInterval(suggestion.duration + buffer)
+            if consumptionEnd < gap.end - minimumDuration {
                 gap.start = consumptionEnd
                 gaps[gapIndex] = gap
             } else {
@@ -244,14 +367,12 @@ private extension EnhancedDayView {
         return gaps
     }
     
-    func snapToNearestFiveMinutes(_ date: Date) -> Date {
+    func snapUpToNearestFiveMinutes(_ date: Date) -> Date {
         let calendar = Calendar.current
-        let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
-        guard let baseDate = calendar.date(from: components) else { return date }
-        let minute = components.minute ?? 0
+        let minute = calendar.component(.minute, from: date)
         let remainder = minute % 5
-        let snappedMinute = minute - remainder
-        return calendar.date(bySetting: .minute, value: snappedMinute, of: baseDate) ?? date
+        let delta = remainder == 0 ? 0 : 5 - remainder
+        return calendar.date(byAdding: .minute, value: delta, to: date) ?? date
     }
     
     func normalizeSuggestions(_ suggestions: [Suggestion]) -> [Suggestion] {
@@ -314,8 +435,15 @@ private extension EnhancedDayView {
         for suggestion in suggestionsToAccept {
             dataManager.applySuggestion(suggestion)
         }
-        withAnimation(.spring(response: 0.5, dampingFraction: 0.9)) {
+        let removal = {
             ghostSuggestions.removeAll { acceptedIDs.contains($0.id) }
+        }
+        if reduceMotion {
+            removal()
+        } else {
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.9)) {
+                removal()
+            }
         }
         selectedGhostIDs.subtract(acceptedIDs)
         Task { @MainActor in

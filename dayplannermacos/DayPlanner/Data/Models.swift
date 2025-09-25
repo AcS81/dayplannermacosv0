@@ -755,7 +755,11 @@ struct UserPreferences: Codable {
     // PRD Required Settings  
     var showEphemeralInsights: Bool = true
     var safeMode: Bool = false // Safe Mode: only non-destructive suggestions
-    
+    var autoRefreshRecommendations: Bool = true
+    var showRecommendationBadges: Bool = true
+    var showSuggestionContext: Bool = true
+    var eventKitWritePolicy: EventKitWritePolicy = .writeOnAccept
+
     // Calendar & Integration
     var eventKitEnabled: Bool = true
     var twoWaySync: Bool = true
@@ -779,6 +783,20 @@ struct SuggestionWeighting: Codable {
     var pinBoost: Double = 0.25
     var pillarBoost: Double = 0.15
     var feedbackBoost: Double = 0.10
+}
+
+enum EventKitWritePolicy: String, Codable, CaseIterable, Identifiable {
+    case readOnly
+    case writeOnAccept
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .readOnly: return "Read-only"
+        case .writeOnAccept: return "Write on accept"
+        }
+    }
 }
 
 struct SuggestionFeedbackStats: Codable {

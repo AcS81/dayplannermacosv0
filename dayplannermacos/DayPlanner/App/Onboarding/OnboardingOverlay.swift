@@ -10,15 +10,22 @@ struct OnboardingOverlay: View {
     @State private var feedbackComment: String = "First impression is solid!"
     @State private var isAcceptingGhost = false
     
+    private var shouldShowSkipButton: Bool {
+        coordinator.step != .checklist
+    }
+    
     var body: some View {
         if coordinator.isActive, coordinator.step != .completed {
-            VStack {
-                Spacer()
+            ZStack(alignment: .bottom) {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .allowsHitTesting(false)
                 onboardingCard
                     .padding(.horizontal, 28)
                     .padding(.bottom, 32)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+            .ignoresSafeArea()
             .animation(.spring(response: 0.6, dampingFraction: 0.85), value: coordinator.step)
         }
     }
@@ -36,6 +43,19 @@ struct OnboardingOverlay: View {
                     Text(detailForStep(coordinator.step))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if shouldShowSkipButton {
+                    Button(action: coordinator.completeOnboarding) {
+                        Text("Skip onboarding")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.gray.opacity(0.12), in: Capsule())
                 }
             }
             Divider()

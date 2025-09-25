@@ -11,6 +11,11 @@ struct TodoListView: View {
     @EnvironmentObject private var dataManager: AppDataManager
     @State private var showingAddTodo = false
     @State private var followUpEditor: FollowUpEditorState?
+    private let dragEncoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }()
     
     private var followUpItems: [TodoItem] {
         dataManager.appState.todoItems.filter { $0.isFollowUp && !$0.isCompleted }
@@ -108,7 +113,8 @@ struct TodoListView: View {
                                     FollowUpRow(
                                         item: item,
                                         onConfirm: { followUpEditor = FollowUpEditorState(item: item) },
-                                        onDelete: { dataManager.removeTodoItem(item.id) }
+                                        onDelete: { dataManager.removeTodoItem(item.id) },
+                                        onDrag: { dragProvider(for: item) }
                                     )
                                 }
                             }
@@ -122,7 +128,8 @@ struct TodoListView: View {
                                     TodoRow(
                                         item: item,
                                         onToggle: { dataManager.toggleTodoCompletion(item.id) },
-                                        onDelete: { dataManager.removeTodoItem(item.id) }
+                                        onDelete: { dataManager.removeTodoItem(item.id) },
+                                        onDrag: { dragProvider(for: item) }
                                     )
                                 }
                             }
@@ -159,6 +166,23 @@ struct TodoListView: View {
         }
         .padding(.bottom, 4)
     }
+
+    private func dragProvider(for item: TodoItem) -> NSItemProvider {
+        let payload = TodoDragPayload(
+            id: item.id,
+            title: item.title,
+            dueDate: item.dueDate,
+            isCompleted: item.isCompleted,
+            followStart: item.followUp?.startTime,
+            followDuration: item.followUp?.duration,
+            notes: item.notes
+        )
+        guard let data = try? dragEncoder.encode(payload),
+              let json = String(data: data, encoding: .utf8) else {
+            return NSItemProvider(object: NSString(string: "todo_item:{}"))
+        }
+        return NSItemProvider(object: NSString(string: "todo_item:\(json)"))
+    }
 }
 
 // MARK: - Follow-up UI
@@ -167,6 +191,7 @@ private struct FollowUpRow: View {
     let item: TodoItem
     let onConfirm: () -> Void
     let onDelete: () -> Void
+    let onDrag: () -> NSItemProvider
     
     private var followUp: FollowUpMetadata {
         item.followUp ?? FollowUpMetadata(
@@ -252,6 +277,7 @@ private struct FollowUpRow: View {
                 .strokeBorder(Color.orange.opacity(0.25), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.08), radius: 8, y: 3)
+        .onDrag { onDrag() }
     }
 }
 
@@ -261,6 +287,7 @@ private struct TodoRow: View {
     let item: TodoItem
     let onToggle: () -> Void
     let onDelete: () -> Void
+    let onDrag: () -> NSItemProvider
     
     private var dueDateText: String? {
         guard let dueDate = item.dueDate else { return nil }
@@ -319,6 +346,7 @@ private struct TodoRow: View {
             RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(.white.opacity(0.08), lineWidth: 1)
         )
+        .onDrag { onDrag() }
     }
 }
 
@@ -463,6 +491,16 @@ private struct FollowUpConfirmSheet: View {
         onConfirm(updated)
         dismiss()
     }
+}
+
+private struct TodoDragPayload: Codable {
+    let id: UUID
+    let title: String
+    let dueDate: Date?
+    let isCompleted: Bool
+    let followStart: Date?
+    let followDuration: TimeInterval?
+    let notes: String?
 }
 
 // MARK: - Add To-Do Sheet

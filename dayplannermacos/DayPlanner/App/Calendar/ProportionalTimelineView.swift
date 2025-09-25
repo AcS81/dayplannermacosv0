@@ -17,7 +17,17 @@ struct ProportionalTimelineView: View {
     private let dayStartHour: Int
     private let dayEndHour: Int
     @Binding private var selectedGhosts: Set<UUID>
-    
+
+    struct DroppedTodoPayload: Decodable {
+        let id: UUID
+        let title: String
+        let dueDate: Date?
+        let isCompleted: Bool
+        let followStart: Date?
+        let followDuration: TimeInterval?
+        let notes: String?
+    }
+
     init(
         selectedDate: Date,
         blocks: [TimeBlock],
@@ -348,29 +358,33 @@ struct TimelineCanvas: View {
         }
         // Handle todo item drops
         else if payload.hasPrefix("todo_item:") {
-            let parts = payload.dropFirst("todo_item:".count).components(separatedBy: "|")
-            if parts.count >= 4 {
-                let title = parts[0]
-                let _ = parts[1] // UUID - we don't need it for the time block
-                let dueDateString = parts[2]
-                let isCompleted = Bool(parts[3]) ?? false
-                
-                // Don't create time blocks for completed todos
-                guard !isCompleted else { return }
-                
-                // Create enhanced title with AI context
-                let enhancedTitle = aiService.enhanceEventTitle(originalTitle: title, time: time, duration: 3600)
-                
-                let newBlock = TimeBlock(
-                    title: enhancedTitle,
-                    startTime: time,
-                    duration: 3600, // Default 1 hour for todo items
-                    energy: .daylight,
-                    emoji: "📝"
-                )
-                
-                dataManager.addTimeBlock(newBlock)
-            }
+            let jsonString = String(payload.dropFirst("todo_item:".count))
+            guard let data = jsonString.data(using: .utf8) else { return }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            guard let todoPayload = try? decoder.decode(ProportionalTimelineView.DroppedTodoPayload.self, from: data),
+                  !todoPayload.isCompleted else { return }
+
+            let defaultDuration = dataManager.appState.preferences.defaultBlockDuration
+            let duration = todoPayload.followDuration ?? defaultDuration
+
+            // Create enhanced title with AI context
+            let enhancedTitle = aiService.enhanceEventTitle(
+                originalTitle: todoPayload.title,
+                time: time,
+                duration: duration
+            )
+
+            let newBlock = TimeBlock(
+                title: enhancedTitle,
+                startTime: time,
+                duration: duration,
+                energy: .daylight,
+                emoji: "📝",
+                notes: todoPayload.notes
+            )
+
+            dataManager.addTimeBlock(newBlock)
         }
     }
 }
@@ -747,6 +761,10 @@ struct PreciseEventCard: View {
         }
         .buttonStyle(.plain)
         .help(edge == .leading ? "Plan something before this block" : "Plan something after this block")
+        .accessibilityLabel(
+            Text(edge == .leading ? "Add block before \(block.title)" : "Add block after \(block.title)")
+        )
+        .accessibilityHint(Text("Opens the gap planner"))
     }
     
     private func openGapEditor(for edge: GapEdgeContext.Edge) {

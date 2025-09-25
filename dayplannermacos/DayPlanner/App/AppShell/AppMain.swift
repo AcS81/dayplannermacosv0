@@ -235,20 +235,9 @@ struct ContentView: View {
                 .transition(.opacity)
             }
             
-            // Floating Action Bar - positioned as overlay
+            // Bottom Mind Button
             VStack {
                 Spacer()
-                HStack {
-                    Spacer()
-                    FloatingActionBarView()
-                        .environmentObject(dataManager)
-                        .environmentObject(aiService)
-                        .frame(maxWidth: 600)
-                    Spacer()
-                }
-                .padding(.bottom, 20)
-                
-                // Bottom Mind Button
                 HStack {
                     Spacer()
                     Button(action: {
@@ -283,6 +272,7 @@ struct ContentView: View {
         .sheet(isPresented: $showingSettings) {
             SettingsView()
                 .environmentObject(dataManager)
+                .environmentObject(aiService)
         }
         .sheet(isPresented: $showingAIDiagnostics) {
             AIDiagnosticsView()
@@ -302,7 +292,7 @@ struct ContentView: View {
             aiService.setPatternEngine(dataManager.patternEngine)
             onboarding.startIfNeeded()
         }
-        .onChange(of: mindNavigator.pendingDestination) { destination in
+        .onChange(of: mindNavigator.pendingDestination) { _, destination in
             guard destination != nil else { return }
             withAnimation(.spring(response: 0.6, dampingFraction: 0.85)) {
                 showingMindPanel = true

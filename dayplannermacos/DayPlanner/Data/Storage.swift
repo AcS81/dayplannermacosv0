@@ -33,6 +33,22 @@ enum MicroUpdateReason: Hashable {
     case onboarding
 }
 
+struct SuggestionSnapshot: Identifiable {
+    let id: UUID
+    let title: String
+    let scheduledTime: Date
+    let duration: TimeInterval
+    let score: Double
+    let base: Double
+    let pinBoost: Double
+    let pillarBoost: Double
+    let feedbackBoost: Double
+    let confidence: Double
+    let reason: String?
+    let goalTitle: String?
+    let pillarTitle: String?
+}
+
 // MARK: - Shared DateFormatters
 
 /// Shared DateFormatter instances to avoid recreation overhead
@@ -75,9 +91,11 @@ class AppDataManager: ObservableObject {
     
     private var lastMoodPromptShownAt: Date?
     private var cachedLLMSuggestions: [Suggestion] = []
-    private var lastSuggestionContextDate: Date?
-    private var lastLLMRefresh: Date?
-    private var pendingMicroUpdateReasons: [MicroUpdateReason] = []
+    @Published private(set) var lastSuggestionContextDate: Date?
+    @Published private(set) var lastSuggestionRefresh: Date?
+    @Published private(set) var suggestionSnapshots: [SuggestionSnapshot] = []
+    @Published private(set) var pendingMicroUpdateReasons: [MicroUpdateReason] = []
+    @Published var diagnosticsGhostOverrideActive = false
     private var cancellables: Set<AnyCancellable> = []
 
     func requestMicroUpdate(_ reason: MicroUpdateReason) {
@@ -95,6 +113,10 @@ class AppDataManager: ObservableObject {
         if let index = pendingMicroUpdateReasons.firstIndex(of: reason) {
             pendingMicroUpdateReasons.remove(at: index)
         }
+    }
+
+    var cachedSuggestionCount: Int {
+        cachedLLMSuggestions.count
     }
     
     // Debug tracking
@@ -190,15 +212,22 @@ class AppDataManager: ObservableObject {
         lastMoodPromptShownAt = Date()
     }
 
-    private func updateTodaysMoodEntry(reference date: Date = Date()) {
+    private func updateTodaysMoodEntry() {
         let calendar = Calendar.current
-        todaysMoodEntry = appState.moodEntries.last(where: { calendar.isDate($0.capturedAt, inSameDayAs: date) })
+        let today = Date()
+        todaysMoodEntry = appState.moodEntries.last(where: { calendar.isDate($0.capturedAt, inSameDayAs: today) })
         if let entry = todaysMoodEntry {
+            if calendar.isDate(appState.currentDay.date, inSameDayAs: today) {
+                needsMoodPrompt = false
+                lastMoodPromptShownAt = nil
+            }
             appState.currentDay.mood = entry.mood
+        } else if calendar.isDate(appState.currentDay.date, inSameDayAs: today) {
+            if lastMoodPromptShownAt == nil {
+                needsMoodPrompt = true
+            }
+        } else {
             needsMoodPrompt = false
-            lastMoodPromptShownAt = nil
-        } else if lastMoodPromptShownAt == nil {
-            needsMoodPrompt = true
         }
     }
 
@@ -432,7 +461,7 @@ class AppDataManager: ObservableObject {
             } catch {
                 cachedLLMSuggestions = AIService.mockSuggestions()
             }
-            lastLLMRefresh = Date()
+            lastSuggestionRefresh = Date()
             lastSuggestionContextDate = context.date
         }
         return cachedLLMSuggestions
@@ -448,7 +477,7 @@ class AppDataManager: ObservableObject {
         if let reason, reasonRequiresLLM(reason) {
             return true
         }
-        if let lastRefresh = lastLLMRefresh, Date().timeIntervalSince(lastRefresh) > 900 {
+        if let lastRefresh = lastSuggestionRefresh, Date().timeIntervalSince(lastRefresh) > 900 {
             return true
         }
         return false
@@ -491,6 +520,26 @@ class AppDataManager: ObservableObject {
                 pillarBoost: pillarInfo.boost,
                 feedbackBoost: feedbackInfo.boost,
                 confidence: suggestion.confidence
+            )
+        }
+        suggestionSnapshots = annotated.map { entry in
+            let suggestion = entry.suggestion
+            let goalTitle = suggestion.relatedGoalTitle ?? appState.goals.first(where: { $0.id == suggestion.relatedGoalId })?.title
+            let pillarTitle = suggestion.relatedPillarTitle ?? appState.pillars.first(where: { $0.id == suggestion.relatedPillarId })?.name
+            return SuggestionSnapshot(
+                id: suggestion.id,
+                title: suggestion.title,
+                scheduledTime: suggestion.suggestedTime,
+                duration: suggestion.duration,
+                score: suggestion.weight ?? 0,
+                base: entry.base,
+                pinBoost: entry.pinBoost,
+                pillarBoost: entry.pillarBoost,
+                feedbackBoost: entry.feedbackBoost,
+                confidence: entry.confidence,
+                reason: suggestion.reason ?? suggestion.explanation,
+                goalTitle: goalTitle,
+                pillarTitle: pillarTitle
             )
         }
         let sorted = annotated.sorted { ($0.suggestion.weight ?? 0) > ($1.suggestion.weight ?? 0) }
@@ -947,6 +996,7 @@ class AppDataManager: ObservableObject {
     // MARK: - Day Management
     
     func switchToDay(_ date: Date) {
+        diagnosticsGhostOverrideActive = false
         // Analyze current day before switching
         if !appState.currentDay.blocks.isEmpty {
             let context = DayContext(
@@ -982,7 +1032,7 @@ class AppDataManager: ObservableObject {
         }
         ensureTodayExists()
         refreshPastBlocks()
-        updateTodaysMoodEntry(reference: date)
+        updateTodaysMoodEntry()
         syncExternalEvents(for: date)
     }
     

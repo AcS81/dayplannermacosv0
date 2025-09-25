@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct GhostOverlay: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let selectedDate: Date
     let dayStartHour: Int
     let minuteHeight: CGFloat
@@ -18,7 +19,12 @@ struct GhostOverlay: View {
                 isSelected: selectedGhosts.contains(suggestion.id),
                 onToggle: { onToggle(suggestion) }
             )
-            .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            .transition(reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 0.98)))
+        }
+        .transaction { transaction in
+            if reduceMotion {
+                transaction.disablesAnimations = true
+            }
         }
     }
 }
@@ -32,6 +38,7 @@ private struct GhostEventCard: View {
     let onToggle: () -> Void
     
     @EnvironmentObject private var dataManager: AppDataManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovering = false
     
     private var calendar: Calendar { Calendar.current }
@@ -126,6 +133,18 @@ private struct GhostEventCard: View {
         return suggestion.relatedPillarTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     
+    private var showSuggestionContext: Bool {
+        dataManager.appState.preferences.showSuggestionContext
+    }
+
+    private var accessibilitySummary: String {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        let timeString = formatter.string(from: suggestion.suggestedTime)
+        let minutes = Int(suggestion.duration / 60)
+        return "Suggested block \(suggestion.title) at \(timeString) for \(minutes) minutes"
+    }
+
     var body: some View {
         Button(action: onToggle) {
             HStack(alignment: .top, spacing: 10) {
@@ -165,11 +184,11 @@ private struct GhostEventCard: View {
                         }
                     }
 
-                    if !connectionBadgeItems.isEmpty {
+                    if showSuggestionContext && !connectionBadgeItems.isEmpty {
                         ConnectionBadgeRow(items: connectionBadgeItems)
                     }
                     
-                    if !suggestion.explanation.isEmpty {
+                    if showSuggestionContext && !suggestion.explanation.isEmpty {
                         Text(suggestion.explanation)
                             .font(.caption2)
                             .foregroundStyle(Color.white.opacity(0.75))
@@ -198,12 +217,21 @@ private struct GhostEventCard: View {
         }
         .buttonStyle(.plain)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(accessibilitySummary))
+        .accessibilityValue(Text(isSelected ? "Selected" : "Not selected"))
+        .accessibilityHint(Text("Activate to toggle this suggestion"))
+        .accessibilityAddTraits(.isButton)
         .frame(height: eventHeight, alignment: .top)
         .offset(y: yPosition)
         .opacity(isHovering ? 0.95 : 0.85)
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.2)) {
+            if reduceMotion {
                 isHovering = hovering
+            } else {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isHovering = hovering
+                }
             }
         }
     }
@@ -355,10 +383,13 @@ struct GhostAcceptanceBar: View {
                 .controlSize(.large)
                 .tint(.blue)
                 .padding(.vertical, 2)
+                .accessibilityHint(Text(selectedCount > 0 ? "Stages the selected suggestions" : "Stages all suggestions"))
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
         .background(.ultraThinMaterial, in: Capsule())
         .shadow(color: Color.black.opacity(0.15), radius: 20, y: 10)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(subtitle))
     }
 }

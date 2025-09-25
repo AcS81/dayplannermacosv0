@@ -73,7 +73,7 @@ struct MindPanel: View {
                     .padding(.vertical, 18)
                 }
                 .scrollIndicators(.hidden)
-                .onChange(of: mindNavigator.pendingDestination) { destination in
+                .onChange(of: mindNavigator.pendingDestination) { _, destination in
                     guard let destination else { return }
                     withAnimation(.spring(response: 0.6, dampingFraction: 0.85)) {
                         proxy.scrollTo(destination.section, anchor: .top)

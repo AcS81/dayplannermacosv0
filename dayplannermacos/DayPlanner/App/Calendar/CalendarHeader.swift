@@ -8,6 +8,7 @@ struct CalendarPanelHeader: View {
     @Binding var showingRecommendations: Bool
     @Binding var showingTodoList: Bool
     let ghostCount: Int
+    let showBadges: Bool
     let isDefaultMonthView: Bool // Track if month view is shown by default
     let onBackToCalendar: (() -> Void)? // Callback to return to calendar view
     
@@ -118,7 +119,7 @@ struct CalendarPanelHeader: View {
                             .font(.footnote)
                             .fontWeight(.semibold)
                             .foregroundStyle(showingRecommendations ? Color.white : Color.primary.opacity(0.85))
-                        if ghostCount > 0 {
+                        if showBadges && ghostCount > 0 {
                             Text("\(ghostCount)")
                                 .font(.caption2.monospacedDigit())
                                 .padding(.horizontal, 6)

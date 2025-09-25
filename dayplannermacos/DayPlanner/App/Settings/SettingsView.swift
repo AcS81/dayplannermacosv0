@@ -2,6 +2,7 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
+import Foundation
 
 struct SettingsView: View {
     @EnvironmentObject private var dataManager: AppDataManager
@@ -55,7 +56,8 @@ enum SettingsTab: String, CaseIterable {
     case chains = "Chains"
     case data = "Data & History"
     case about = "About"
-    
+    case diagnostics = "Diagnostics"
+
     var icon: String {
         switch self {
         case .general: return "gearshape"
@@ -65,6 +67,7 @@ enum SettingsTab: String, CaseIterable {
         case .chains: return "link"
         case .data: return "externaldrive"
         case .about: return "info.circle"
+        case .diagnostics: return "waveform.path.ecg"
         }
     }
 }
@@ -110,6 +113,7 @@ struct SettingsSidebar: View {
 struct SettingsContent: View {
     let selectedTab: SettingsTab
     @EnvironmentObject private var dataManager: AppDataManager
+    @EnvironmentObject private var aiService: AIService
     
     var body: some View {
         ScrollView {
@@ -135,6 +139,10 @@ struct SettingsContent: View {
                         .environmentObject(dataManager)
                 case .about:
                     AboutSettingsView()
+                case .diagnostics:
+                    DiagnosticsSettingsView()
+                        .environmentObject(dataManager)
+                        .environmentObject(aiService)
                 }
             }
             .padding(24)
@@ -239,8 +247,8 @@ struct AITrustSettingsView: View {
             SettingsGroup("Safety") {
                 Toggle("Safe Mode", isOn: $safeMode)
                     .help("Only suggest non-destructive changes, never modify existing events")
-                    .onChange(of: safeMode) {
-                        dataManager.appState.preferences.safeMode = safeMode
+                    .onChange(of: safeMode) { _, newValue in
+                        dataManager.appState.preferences.safeMode = newValue
                         dataManager.save()
                     }
             }
@@ -253,8 +261,8 @@ struct AITrustSettingsView: View {
                             .frame(width: 120, alignment: .leading)
                         SecureField("sk-...", text: $openaiApiKey)
                             .textFieldStyle(.roundedBorder)
-                            .onChange(of: openaiApiKey) {
-                                dataManager.appState.preferences.openaiApiKey = openaiApiKey
+                            .onChange(of: openaiApiKey) { _, newValue in
+                                dataManager.appState.preferences.openaiApiKey = newValue
                                 UserDefaults.standard.set(openaiApiKey, forKey: "openaiApiKey")
                                 dataManager.save()
                             }
@@ -272,8 +280,8 @@ struct AITrustSettingsView: View {
                             .frame(width: 120, alignment: .leading)
                         SecureField("sk-...", text: $whisperApiKey)
                             .textFieldStyle(.roundedBorder)
-                            .onChange(of: whisperApiKey) {
-                                dataManager.appState.preferences.whisperApiKey = whisperApiKey
+                            .onChange(of: whisperApiKey) { _, newValue in
+                                dataManager.appState.preferences.whisperApiKey = newValue
                                 UserDefaults.standard.set(whisperApiKey, forKey: "whisperApiKey")
                                 dataManager.save()
                             }
@@ -291,8 +299,8 @@ struct AITrustSettingsView: View {
                             .frame(width: 120, alignment: .leading)
                         TextField("http://localhost:1234", text: $customApiEndpoint)
                             .textFieldStyle(.roundedBorder)
-                            .onChange(of: customApiEndpoint) {
-                                dataManager.appState.preferences.customApiEndpoint = customApiEndpoint
+                            .onChange(of: customApiEndpoint) { _, newValue in
+                                dataManager.appState.preferences.customApiEndpoint = newValue
                                 dataManager.save()
                             }
                         Button("Paste") {
@@ -425,6 +433,18 @@ struct CalendarSettingsView: View {
                     }
                     .buttonStyle(.bordered)
                 }
+
+                Picker("Write policy", selection: Binding(
+                    get: { dataManager.appState.preferences.eventKitWritePolicy },
+                    set: { newValue in
+                        dataManager.appState.preferences.eventKitWritePolicy = newValue
+                        dataManager.save()
+                    }
+                )) {
+                    ForEach(EventKitWritePolicy.allCases) { policy in
+                        Text(policy.label).tag(policy)
+                    }
+                }
             }
             
             SettingsGroup("Sync Settings") {
@@ -451,6 +471,34 @@ struct CalendarSettingsView: View {
                     Text("Work").tag(1)
                     Text("Family").tag(2)
                 }
+            }
+
+            SettingsGroup("Recommendations") {
+                Toggle("Auto-refresh suggestions", isOn: Binding(
+                    get: { dataManager.appState.preferences.autoRefreshRecommendations },
+                    set: { newValue in
+                        dataManager.appState.preferences.autoRefreshRecommendations = newValue
+                        dataManager.save()
+                    }
+                ))
+                .help("When off, ghosts refresh only on manual actions")
+
+                Toggle("Show ghost badges", isOn: Binding(
+                    get: { dataManager.appState.preferences.showRecommendationBadges },
+                    set: { newValue in
+                        dataManager.appState.preferences.showRecommendationBadges = newValue
+                        dataManager.save()
+                    }
+                ))
+
+                Toggle("Show \"why this\" context", isOn: Binding(
+                    get: { dataManager.appState.preferences.showSuggestionContext },
+                    set: { newValue in
+                        dataManager.appState.preferences.showSuggestionContext = newValue
+                        dataManager.save()
+                    }
+                ))
+                .help("Controls goal/pillar badges and rationale text on ghosts")
             }
         }
     }
@@ -737,6 +785,268 @@ struct DataHistorySettingsView: View {
             Text("This will permanently delete all your data, including time blocks, chains, pillars, and goals. This action cannot be undone.")
         }
     }
+}
+
+struct DiagnosticsSettingsView: View {
+    @EnvironmentObject private var dataManager: AppDataManager
+    @EnvironmentObject private var aiService: AIService
+    @State private var diagnosticsLog: String = ""
+    @State private var isRunningDiagnostics = false
+
+    private let timestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    private let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    private var topSuggestions: [SuggestionSnapshot] {
+        Array(dataManager.suggestionSnapshots.prefix(10))
+    }
+
+    private var recentFeedback: [FeedbackEntry] {
+        Array(dataManager.appState.feedbackEntries.suffix(10).reversed())
+    }
+
+    private var pendingReasonsDescription: String {
+        guard !dataManager.pendingMicroUpdateReasons.isEmpty else { return "None" }
+        return dataManager.pendingMicroUpdateReasons.map(label(for:)).joined(separator: ", ")
+    }
+
+    private func label(for reason: MicroUpdateReason) -> String {
+        switch reason {
+        case .acceptedSuggestion: return "accept"
+        case .rejectedSuggestion: return "reject"
+        case .editedBlock: return "edit"
+        case .feedback: return "feedback"
+        case .pinChange: return "pin"
+        case .externalEvent: return "external"
+        case .moodChange: return "mood"
+        case .onboarding: return "onboarding"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Engine Diagnostics")
+                .font(.title2)
+                .fontWeight(.semibold)
+
+            SettingsGroup("Recommendation Pool (Top \(topSuggestions.count))") {
+                if topSuggestions.isEmpty {
+                    Text("No weighted recommendations yet. Trigger a refresh to populate this table.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    ForEach(topSuggestions) { snapshot in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(snapshot.title)
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                Spacer()
+                                Text(String(format: "%.2f", snapshot.score))
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundColor(.blue)
+                            }
+                            HStack(spacing: 12) {
+                                Text("conf \(String(format: "%.0f%%", snapshot.confidence * 100))")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Text("base \(String(format: "%.2f", snapshot.base))")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Text("pin +\(String(format: "%.2f", snapshot.pinBoost))")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Text("pillar +\(String(format: "%.2f", snapshot.pillarBoost))")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Text("feedback +\(String(format: "%.2f", snapshot.feedbackBoost))")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            if let reason = snapshot.reason, !reason.isEmpty {
+                                Text(reason)
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            HStack(spacing: 8) {
+                                if let goal = snapshot.goalTitle {
+                                    Label(goal, systemImage: "target")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                if let pillar = snapshot.pillarTitle {
+                                    Label(pillar, systemImage: "building.columns")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 6)
+                        if snapshot.id != topSuggestions.last?.id {
+                            Divider().opacity(0.2)
+                        }
+                    }
+                }
+            }
+
+            SettingsGroup("Recent Feedback (last \(recentFeedback.count))") {
+                if recentFeedback.isEmpty {
+                    Text("No feedback captured yet.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    ForEach(recentFeedback) { entry in
+                        HStack(alignment: .firstTextBaseline, spacing: 12) {
+                            Text(timestampFormatter.string(from: entry.timestamp))
+                                .font(.caption2.monospacedDigit())
+                                .foregroundColor(.secondary)
+                            Text(entry.tagSummary)
+                                .font(.caption)
+                            if let note = entry.freeText, !note.isEmpty {
+                                Text("•")
+                                    .foregroundStyle(.tertiary)
+                                Text(note)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            Text(entry.targetType.rawValue.capitalized)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        if entry.id != recentFeedback.last?.id {
+                            Divider().opacity(0.1)
+                        }
+                    }
+                }
+            }
+
+            SettingsGroup("Engine Stats") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Last refresh: \(lastRefreshText)")
+                        .font(.caption)
+                    Text("Context date: \(contextDateText)")
+                        .font(.caption)
+                    Text("Cached ghosts: \(dataManager.cachedSuggestionCount)")
+                        .font(.caption)
+                    Text("Pending micro-updates: \(pendingReasonsDescription)")
+                        .font(.caption)
+                    Text("Auto refresh: \(dataManager.appState.preferences.autoRefreshRecommendations ? "On" : "Off")")
+                        .font(.caption)
+                    Text("AI connection: \(aiService.isConnected ? "Online" : "Offline")")
+                        .font(.caption)
+                }
+            }
+
+            SettingsGroup("Tools") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Button {
+                        Task {
+                            await MainActor.run { isRunningDiagnostics = true }
+                            let result = await aiService.runDiagnostics()
+                            await MainActor.run {
+                                diagnosticsLog = result
+                                isRunningDiagnostics = false
+                            }
+                        }
+                    } label: {
+                        Label(isRunningDiagnostics ? "Running…" : "Run AI diagnostics", systemImage: "waveform")
+                    }
+                    .disabled(isRunningDiagnostics)
+                    .buttonStyle(.borderedProminent)
+
+                    Button {
+                        Task {
+                            await aiService.checkConnection()
+                            await MainActor.run {
+                                let stamp = timestampFormatter.string(from: Date())
+                                let status = aiService.isConnected ? "✅ Connection ok" : "❌ Connection failed"
+                                diagnosticsLog = "[\(stamp)] \(status)\n" + diagnosticsLog
+                            }
+                        }
+                    } label: {
+                        Label("Test connection", systemImage: "dot.radiowaves.left.and.right")
+                    }
+                    .buttonStyle(.bordered)
+
+                    Divider().opacity(0.2)
+
+                    HStack {
+                        Text("Performance harness")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                        Spacer()
+                        if dataManager.diagnosticsGhostOverrideActive {
+                            Text("ACTIVE")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.orange)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.orange.opacity(0.15), in: Capsule())
+                        }
+                    }
+
+                    Text("Spawns synthetic ghosts for timeline profiling (25 blocks spaced hourly).")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+
+                    HStack {
+                        Button {
+                            NotificationCenter.default.post(name: .diagnosticsSpawnGhosts, object: nil, userInfo: ["count": 25])
+                        } label: {
+                            Label("Spawn test ghosts", systemImage: "sparkles")
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Button {
+                            NotificationCenter.default.post(name: .diagnosticsClearGhosts, object: nil)
+                        } label: {
+                            Label("Clear", systemImage: "trash")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!dataManager.diagnosticsGhostOverrideActive)
+                    }
+
+                    if !diagnosticsLog.isEmpty {
+                        ScrollView {
+                            Text(diagnosticsLog)
+                                .font(.system(.caption, design: .monospaced))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(maxHeight: 160)
+                        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+            }
+        }
+    }
+
+    private var lastRefreshText: String {
+        guard let date = dataManager.lastSuggestionRefresh else { return "—" }
+        return dateFormatter.string(from: date)
+    }
+
+    private var contextDateText: String {
+        guard let date = dataManager.lastSuggestionContextDate else { return "—" }
+        return dateFormatter.string(from: date)
+    }
+}
+
+extension Notification.Name {
+    static let diagnosticsSpawnGhosts = Notification.Name("DiagnosticsSpawnGhosts")
+    static let diagnosticsClearGhosts = Notification.Name("DiagnosticsClearGhosts")
 }
 
 struct AboutSettingsView: View {
