@@ -7,10 +7,31 @@
 
 import Foundation
 import SwiftUI
+import Combine
 import EventKit
 import CoreLocation
 import Speech
 import AVFoundation
+
+@MainActor
+protocol OnboardingProgressDelegate: AnyObject {
+    func onboardingDidCaptureMood(_ entry: MoodEntry)
+    func onboardingDidCreateBlock(_ block: TimeBlock, acceptedSuggestion: Bool)
+    func onboardingDidCreatePillar(_ pillar: Pillar)
+    func onboardingDidCreateGoal(_ goal: Goal)
+    func onboardingDidSubmitFeedback(_ entry: FeedbackEntry)
+}
+
+enum MicroUpdateReason: Hashable {
+    case acceptedSuggestion
+    case rejectedSuggestion
+    case editedBlock
+    case feedback
+    case pinChange
+    case externalEvent
+    case moodChange
+    case onboarding
+}
 
 // MARK: - Shared DateFormatters
 
@@ -48,10 +69,42 @@ class AppDataManager: ObservableObject {
     // Intelligence and analysis
     @Published var vibeAnalyzer = VibeAnalyzer()
     @Published var patternEngine = PatternLearningEngine()
+    weak var onboardingDelegate: OnboardingProgressDelegate?
+    @Published private(set) var todaysMoodEntry: MoodEntry?
+    @Published var needsMoodPrompt = true
+    
+    private var lastMoodPromptShownAt: Date?
+    private var cachedLLMSuggestions: [Suggestion] = []
+    private var lastSuggestionContextDate: Date?
+    private var lastLLMRefresh: Date?
+    private var pendingMicroUpdateReasons: [MicroUpdateReason] = []
+    private var cancellables: Set<AnyCancellable> = []
+
+    func requestMicroUpdate(_ reason: MicroUpdateReason) {
+        if !pendingMicroUpdateReasons.contains(reason) {
+            pendingMicroUpdateReasons.append(reason)
+        }
+    }
+
+    func consumePendingMicroUpdate() -> MicroUpdateReason? {
+        guard !pendingMicroUpdateReasons.isEmpty else { return nil }
+        return pendingMicroUpdateReasons.removeFirst()
+    }
+
+    func consumeMicroUpdate(reason: MicroUpdateReason) {
+        if let index = pendingMicroUpdateReasons.firstIndex(of: reason) {
+            pendingMicroUpdateReasons.remove(at: index)
+        }
+    }
+    
+    // Debug tracking
+    private var loggedAmbiguousGoalSuggestions: Set<UUID> = []
+    private var loggedAmbiguousPillarSuggestions: Set<UUID> = []
     
     // MARK: - Initialization
     
     init() {
+        patternEngine = PatternLearningEngine(dataManager: self)
         load()
         
         // Auto-save every 5 minutes
@@ -60,6 +113,14 @@ class AppDataManager: ObservableObject {
                 self.save()
             }
         }
+
+        eventKitService.$lastChangeToken
+            .dropFirst()
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.syncExternalEvents(for: self.appState.currentDay.date)
+            }
+            .store(in: &cancellables)
     }
     
     // MARK: - Save & Load
@@ -86,12 +147,15 @@ class AppDataManager: ObservableObject {
                 await MainActor.run {
                     appState = loadedState
                     ensureTodayExists()
+                    ensureGoalGraphsExist()
+                    updateTodaysMoodEntry()
                     isLoading = false
                 }
             } else {
                 // First launch or load failed - create sample data
                 await MainActor.run {
                     createSampleData()
+                    updateTodaysMoodEntry()
                     isLoading = false
                 }
                 save() // Save the sample data
@@ -99,6 +163,178 @@ class AppDataManager: ObservableObject {
         }
     }
     
+    // MARK: - Mood Capture
+
+    func captureMood(_ mood: GlassMood, source: MoodCaptureSource = .launchPrompt) {
+        let entry = MoodEntry(mood: mood, source: source)
+        appState.moodEntries.append(entry)
+        appState.currentDay.mood = mood
+        todaysMoodEntry = entry
+        needsMoodPrompt = false
+        lastMoodPromptShownAt = nil
+        onboardingDelegate?.onboardingDidCaptureMood(entry)
+        updateOnboardingState { state in
+            state.didCaptureMood = true
+            if state.phase == .notStarted || state.phase == .mood {
+                state.phase = .createEvent
+                state.startedAt = state.startedAt ?? Date()
+            }
+        }
+        recordMoodBehavior(entry)
+        requestMicroUpdate(.moodChange)
+        save()
+    }
+
+    func skipMoodPrompt() {
+        needsMoodPrompt = false
+        lastMoodPromptShownAt = Date()
+    }
+
+    private func updateTodaysMoodEntry(reference date: Date = Date()) {
+        let calendar = Calendar.current
+        todaysMoodEntry = appState.moodEntries.last(where: { calendar.isDate($0.capturedAt, inSameDayAs: date) })
+        if let entry = todaysMoodEntry {
+            appState.currentDay.mood = entry.mood
+            needsMoodPrompt = false
+            lastMoodPromptShownAt = nil
+        } else if lastMoodPromptShownAt == nil {
+            needsMoodPrompt = true
+        }
+    }
+
+    private func recordMoodBehavior(_ entry: MoodEntry) {
+        let dayData = DayData(
+            id: appState.currentDay.id.uuidString,
+            date: appState.currentDay.date,
+            mood: entry.mood,
+            blockCount: appState.currentDay.blocks.count,
+            completionRate: appState.currentDay.completionPercentage
+        )
+        let behaviorEvent = BehaviorEvent(
+            .moodLogged(entry),
+            context: EventContext(mood: entry.mood)
+        )
+        patternEngine.recordBehavior(behaviorEvent)
+        let dayEvent = BehaviorEvent(.dayReviewed(dayData, rating: 3), context: EventContext(mood: entry.mood))
+        patternEngine.recordBehavior(dayEvent)
+    }
+
+    private func updateOnboardingState(_ transform: (inout OnboardingState) -> Void) {
+        transform(&appState.onboarding)
+    }
+
+    private func syncExternalEvents(for date: Date) {
+        guard appState.preferences.eventKitEnabled else { return }
+        let startOfDay = Calendar.current.startOfDay(for: date)
+        guard let endOfDay = Calendar.current.date(byAdding: .day, value: 1, to: startOfDay) else { return }
+        let events = eventKitService.fetchEvents(start: startOfDay, end: endOfDay)
+        mergeExternalEvents(events, dayStart: startOfDay, dayEnd: endOfDay)
+    }
+
+    private func mergeExternalEvents(_ events: [EKEvent], dayStart: Date, dayEnd: Date) {
+        guard !events.isEmpty else {
+            // Remove any lingering external blocks if no events exist
+            appState.currentDay.blocks.removeAll { block in
+                block.origin == .external
+            }
+            return
+        }
+
+        let identifiers = Set(events.compactMap { $0.eventIdentifier })
+
+        // Remove deleted external events
+        appState.currentDay.blocks.removeAll { block in
+            guard block.origin == .external else { return false }
+            if let externalId = block.externalEventId {
+                return !identifiers.contains(externalId)
+            }
+            return true
+        }
+
+        // Update or insert events
+        for event in events {
+            guard let identifier = event.eventIdentifier else { continue }
+            if let index = appState.currentDay.blocks.firstIndex(where: { $0.externalEventId == identifier }) {
+                var block = appState.currentDay.blocks[index]
+                let originalStart = block.startTime
+                let originalDuration = block.duration
+                let originalTitle = block.title
+                block.startTime = event.startDate
+                block.duration = max(300, event.endDate.timeIntervalSince(event.startDate))
+                block.title = event.title
+                block.notes = event.notes ?? block.notes
+                block.externalLastModified = event.lastModifiedDate ?? Date()
+                block.confirmationState = .confirmed
+                block.glassState = .solid
+                appState.currentDay.blocks[index] = block
+                if originalStart != block.startTime || originalDuration != block.duration || originalTitle != block.title {
+                    recordExternalChange(for: block)
+                }
+            } else {
+                let block = TimeBlock(
+                    title: event.title,
+                    startTime: event.startDate,
+                    duration: max(300, event.endDate.timeIntervalSince(event.startDate)),
+                    energy: energyEstimate(for: event.startDate),
+                    emoji: "📅",
+                    glassState: .solid,
+                    position: .zero,
+                    relatedGoalId: nil,
+                    relatedGoalTitle: nil,
+                    relatedPillarId: nil,
+                    relatedPillarTitle: nil,
+                    suggestionId: nil,
+                    suggestionReason: "External calendar",
+                    suggestionWeight: nil,
+                    suggestionConfidence: nil,
+                    externalEventId: identifier,
+                    externalLastModified: event.lastModifiedDate ?? Date(),
+                    origin: .external,
+                    notes: event.notes,
+                    confirmationState: .confirmed
+                )
+                appState.addBlock(block)
+                requestMicroUpdate(.externalEvent)
+            }
+        }
+        appState.currentDay.blocks.sort { $0.startTime < $1.startTime }
+        save()
+    }
+
+    private func recordExternalChange(for block: TimeBlock) {
+        let data = TimeBlockData(
+            id: block.id.uuidString,
+            title: block.title,
+            emoji: block.emoji,
+            energy: block.energy,
+            duration: block.duration,
+            period: block.period
+        )
+        let event = BehaviorEvent(
+            .blockModified(data, changes: "external_edit"),
+            context: EventContext(energyLevel: block.energy, mood: appState.currentDay.mood)
+        )
+        patternEngine.recordBehavior(event)
+        requestMicroUpdate(.externalEvent)
+    }
+
+    private func energyEstimate(for startDate: Date) -> EnergyType {
+        let hour = Calendar.current.component(.hour, from: startDate)
+        switch hour {
+        case 5..<11: return .sunrise
+        case 11..<18: return .daylight
+        default: return .moonlight
+        }
+    }
+
+    private func attachEventKitIdentifier(_ blockId: UUID, identifier: String, lastModified: Date) {
+        if let index = appState.currentDay.blocks.firstIndex(where: { $0.id == blockId }) {
+            appState.currentDay.blocks[index].externalEventId = identifier
+            appState.currentDay.blocks[index].externalLastModified = lastModified
+            save()
+        }
+    }
+
     // MARK: - Time Block Operations
     
     func addTimeBlock(_ block: TimeBlock) {
@@ -107,7 +343,16 @@ class AppDataManager: ObservableObject {
         }
         
         // Record for pattern learning
-        recordTimeBlockCreation(block, source: "manual")
+        let creationSource: String
+        switch block.origin {
+        case .suggestion: creationSource = "ai_suggestion"
+        case .onboarding: creationSource = "onboarding"
+        case .external: creationSource = "eventkit"
+        case .chain: creationSource = "chain"
+        case .aiGenerated: creationSource = "ai_generated"
+        case .manual: creationSource = "manual"
+        }
+        recordTimeBlockCreation(block, source: creationSource)
         
         // Award XXP for productive actions
         if block.energy == .sunrise || block.energy == .daylight {
@@ -116,6 +361,9 @@ class AppDataManager: ObservableObject {
         
         refreshPastBlocks()
         save()
+        if block.origin != .external {
+            onboardingDelegate?.onboardingDidCreateBlock(block, acceptedSuggestion: block.origin == .suggestion)
+        }
     }
     
     func updateTimeBlock(_ block: TimeBlock) {
@@ -123,6 +371,7 @@ class AppDataManager: ObservableObject {
             appState.updateBlock(block)
         }
         refreshPastBlocks()
+        requestMicroUpdate(.editedBlock)
         save()
     }
     
@@ -137,6 +386,197 @@ class AppDataManager: ObservableObject {
         var updatedBlock = block
         updatedBlock.startTime = newStartTime
         updateTimeBlock(updatedBlock)
+    }
+    
+    // MARK: - Scheduling Preferences
+
+    func isGoalPinned(_ goalId: UUID) -> Bool {
+        appState.pinnedGoalIds.contains(goalId)
+    }
+
+    func toggleGoalPin(_ goalId: UUID) {
+        if appState.pinnedGoalIds.contains(goalId) {
+            appState.pinnedGoalIds.remove(goalId)
+        } else {
+            appState.pinnedGoalIds.insert(goalId)
+        }
+        save()
+        requestMicroUpdate(.pinChange)
+    }
+
+    func isPillarEmphasized(_ pillarId: UUID) -> Bool {
+        appState.emphasizedPillarIds.contains(pillarId)
+    }
+
+    func togglePillarEmphasis(_ pillarId: UUID) {
+        if appState.emphasizedPillarIds.contains(pillarId) {
+            appState.emphasizedPillarIds.remove(pillarId)
+        } else {
+            appState.emphasizedPillarIds.insert(pillarId)
+        }
+        save()
+        requestMicroUpdate(.pinChange)
+    }
+
+    // MARK: - Suggestion Weighting
+
+    func produceSuggestions(
+        context: DayContext,
+        reason: MicroUpdateReason?,
+        forceLLM: Bool,
+        aiService: AIService
+    ) async -> [Suggestion] {
+        if shouldRefreshSuggestions(for: context, reason: reason, forceLLM: forceLLM) {
+            do {
+                cachedLLMSuggestions = try await aiService.generateSuggestions(for: context)
+            } catch {
+                cachedLLMSuggestions = AIService.mockSuggestions()
+            }
+            lastLLMRefresh = Date()
+            lastSuggestionContextDate = context.date
+        }
+        return cachedLLMSuggestions
+    }
+
+    private func shouldRefreshSuggestions(for context: DayContext, reason: MicroUpdateReason?, forceLLM: Bool) -> Bool {
+        if forceLLM { return true }
+        if cachedLLMSuggestions.isEmpty { return true }
+        if let lastContextDate = lastSuggestionContextDate,
+           !Calendar.current.isDate(lastContextDate, inSameDayAs: context.date) {
+            return true
+        }
+        if let reason, reasonRequiresLLM(reason) {
+            return true
+        }
+        if let lastRefresh = lastLLMRefresh, Date().timeIntervalSince(lastRefresh) > 900 {
+            return true
+        }
+        return false
+    }
+
+    private func reasonRequiresLLM(_ reason: MicroUpdateReason) -> Bool {
+        switch reason {
+        case .acceptedSuggestion,
+             .rejectedSuggestion,
+             .editedBlock,
+             .feedback,
+             .pinChange,
+             .externalEvent,
+             .moodChange,
+             .onboarding:
+            return true
+        }
+    }
+
+    func prioritizeSuggestions(_ suggestions: [Suggestion]) -> [Suggestion] {
+        guard !suggestions.isEmpty else { return [] }
+        let weighting = appState.preferences.suggestionWeighting
+        let annotated = suggestions.map { suggestion -> WeightedSuggestion in
+            let baseScore = suggestion.weight ?? 0.0
+            let goalInfo = goalBoost(for: suggestion, weighting: weighting)
+            let pillarInfo = pillarBoost(for: suggestion, weighting: weighting)
+            let feedbackInfo = feedbackBoost(for: suggestion, weighting: weighting)
+            let totalBoost = goalInfo.boost + pillarInfo.boost + feedbackInfo.boost
+            let finalScore = (baseScore + totalBoost) * suggestion.confidence
+            var updated = suggestion
+            updated.weight = finalScore
+            updated.reason = combinedReason(
+                base: suggestion.reason ?? suggestion.explanation,
+                additions: [goalInfo.annotation, pillarInfo.annotation, feedbackInfo.annotation]
+            )
+            return WeightedSuggestion(
+                suggestion: updated,
+                base: baseScore,
+                pinBoost: goalInfo.boost,
+                pillarBoost: pillarInfo.boost,
+                feedbackBoost: feedbackInfo.boost,
+                confidence: suggestion.confidence
+            )
+        }
+        let sorted = annotated.sorted { ($0.suggestion.weight ?? 0) > ($1.suggestion.weight ?? 0) }
+        debugLogTopSuggestions(sorted)
+        return sorted.map { $0.suggestion }
+    }
+
+    private func goalBoost(for suggestion: Suggestion, weighting: SuggestionWeighting) -> (boost: Double, annotation: String?) {
+        guard let goalId = suggestion.relatedGoalId, appState.pinnedGoalIds.contains(goalId) else {
+            return (0, nil)
+        }
+        let title = suggestion.relatedGoalTitle ?? appState.goals.first(where: { $0.id == goalId })?.title
+        let short = title?.badgeShortTitle(maxLength: 18)
+        return (weighting.pinBoost, short.map { "↑ pinned: \($0)" })
+    }
+
+    private func pillarBoost(for suggestion: Suggestion, weighting: SuggestionWeighting) -> (boost: Double, annotation: String?) {
+        guard let pillarId = suggestion.relatedPillarId, appState.emphasizedPillarIds.contains(pillarId) else {
+            return (0, nil)
+        }
+        let name = suggestion.relatedPillarTitle ?? appState.pillars.first(where: { $0.id == pillarId })?.name
+        let short = name?.badgeShortTitle(maxLength: 18)
+        return (weighting.pillarBoost, short.map { "↑ pillar: \($0)" })
+    }
+
+    private func feedbackBoost(for suggestion: Suggestion, weighting: SuggestionWeighting) -> (boost: Double, annotation: String?) {
+        var labels: [String] = []
+        var strengths: [Double] = []
+        if let goalId = suggestion.relatedGoalId,
+           let stats = appState.goalFeedbackStats[goalId],
+           stats.hasPositiveSignal {
+            let intensity = max(0.0, stats.netScore)
+            strengths.append(min(1.0, intensity))
+            if let title = suggestion.relatedGoalTitle ?? appState.goals.first(where: { $0.id == goalId })?.title {
+                labels.append(title.badgeShortTitle(maxLength: 18))
+            }
+        }
+        if let pillarId = suggestion.relatedPillarId,
+           let stats = appState.pillarFeedbackStats[pillarId],
+           stats.hasPositiveSignal {
+            let intensity = max(0.0, stats.netScore)
+            strengths.append(min(1.0, intensity))
+            if let name = suggestion.relatedPillarTitle ?? appState.pillars.first(where: { $0.id == pillarId })?.name {
+                labels.append(name.badgeShortTitle(maxLength: 18))
+            }
+        }
+        guard !strengths.isEmpty else { return (0, nil) }
+        let averageStrength = strengths.reduce(0, +) / Double(strengths.count)
+        let boost = weighting.feedbackBoost * averageStrength
+        let summary = labels.isEmpty ? "↑ feedback" : "↑ feedback: \(labels.joined(separator: ", "))"
+        return (boost, summary)
+    }
+
+    private func combinedReason(base: String?, additions: [String?]) -> String? {
+        let trimmedBase = base?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let extras = additions.compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        if trimmedBase.isEmpty && extras.isEmpty { return nil }
+        if extras.isEmpty { return trimmedBase }
+        if trimmedBase.isEmpty { return extras.joined(separator: " • ") }
+        return ([trimmedBase] + extras).joined(separator: " • ")
+    }
+
+    private func debugLogTopSuggestions(_ items: [WeightedSuggestion]) {
+        guard !items.isEmpty else { return }
+        let top = items.prefix(5)
+        print("🔍 Suggestion weighting snapshot")
+        for (index, entry) in top.enumerated() {
+            let score = entry.suggestion.weight ?? 0
+            let formatted = String(format: "%.2f", score)
+            let base = String(format: "%.2f", entry.base)
+            let pin = String(format: "%.2f", entry.pinBoost)
+            let pillar = String(format: "%.2f", entry.pillarBoost)
+            let feedback = String(format: "%.2f", entry.feedbackBoost)
+            let confidence = String(format: "%.2f", entry.confidence)
+            print("  \(index + 1). \(entry.suggestion.title) → score \(formatted) = (base \(base) + pin \(pin) + pillar \(pillar) + feedback \(feedback)) × conf \(confidence)")
+        }
+        print("🔍——")
+    }
+
+    private struct WeightedSuggestion {
+        var suggestion: Suggestion
+        var base: Double
+        var pinBoost: Double
+        var pillarBoost: Double
+        var feedbackBoost: Double
+        var confidence: Double
     }
     
     // MARK: - Confirmation & Records
@@ -198,6 +638,7 @@ class AppDataManager: ObservableObject {
             confirmedAt: Date()
         )
         appState.records.append(record)
+        appState.todoItems.removeAll { $0.followUp?.blockId == block.id }
         save()
     }
     
@@ -219,15 +660,31 @@ class AppDataManager: ObservableObject {
     
     func requeueBlock(_ blockId: UUID, notes: String? = nil) {
         guard let index = appState.currentDay.blocks.firstIndex(where: { $0.id == blockId }) else { return }
-        var block = appState.currentDay.blocks[index]
+        var block = appState.currentDay.blocks.remove(at: index)
         let trimmedNotes = notes?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let trimmedNotes, !trimmedNotes.isEmpty {
             block.notes = trimmedNotes
         }
-        block.confirmationState = .scheduled
-        block.glassState = .mist
-        appState.currentDay.blocks[index] = block
-        // TODO: integrate with To-Do backlog and Past markers
+        let followUp = FollowUpMetadata(
+            blockId: block.id,
+            originalTitle: block.title,
+            startTime: block.startTime,
+            endTime: block.endTime,
+            energy: block.energy,
+            emoji: block.emoji,
+            notesSnapshot: block.notes,
+            capturedAt: Date()
+        )
+        let item = TodoItem(
+            title: block.title,
+            dueDate: nil,
+            isCompleted: false,
+            createdDate: Date(),
+            notes: trimmedNotes ?? block.notes,
+            followUp: followUp
+        )
+        appState.todoItems.removeAll { $0.followUp?.blockId == block.id }
+        appState.todoItems.insert(item, at: 0)
         save()
     }
     
@@ -254,6 +711,7 @@ class AppDataManager: ObservableObject {
         // Award XP for creating a pillar
         appState.addXP(15, reason: "Created pillar: \(pillar.name)")
         
+        onboardingDelegate?.onboardingDidCreatePillar(pillar)
     }
     
     func updatePillar(_ pillar: Pillar) {
@@ -271,6 +729,8 @@ class AppDataManager: ObservableObject {
     
     func removePillar(_ pillarId: UUID) {
         appState.pillars.removeAll { $0.id == pillarId }
+        appState.emphasizedPillarIds.remove(pillarId)
+        appState.pillarFeedbackStats.removeValue(forKey: pillarId)
         save()
     }
     
@@ -522,6 +982,8 @@ class AppDataManager: ObservableObject {
         }
         ensureTodayExists()
         refreshPastBlocks()
+        updateTodaysMoodEntry(reference: date)
+        syncExternalEvents(for: date)
     }
     
     func updateDayMood(_ mood: GlassMood) {
@@ -585,6 +1047,18 @@ class AppDataManager: ObservableObject {
             appState.currentDay = Day(date: today)
         }
     }
+
+    private func ensureGoalGraphsExist() {
+        for index in appState.goals.indices {
+            appState.goals[index].graph.ensureSeedIfEmpty(
+                goalTitle: appState.goals[index].title,
+                description: appState.goals[index].description
+            )
+            if appState.goals[index].graph.nodes.contains(where: { $0.pinned }) {
+                appState.pinnedGoalIds.insert(appState.goals[index].id)
+            }
+        }
+    }
     
     private func createSampleData() {
         appState = AppState()
@@ -613,7 +1087,8 @@ class AppDataManager: ObservableObject {
         
         // Add sample goals
         appState.goals = Goal.sampleGoals()
-        
+        ensureGoalGraphsExist()
+
         // Add sample intake questions
         appState.intakeQuestions = IntakeQuestion.sampleQuestions()
         
@@ -637,18 +1112,31 @@ class AppDataManager: ObservableObject {
     // MARK: - Goal Operations
     
     func addGoal(_ goal: Goal) {
-        appState.goals.append(goal)
+        var enrichedGoal = goal
+        enrichedGoal.graph.ensureSeedIfEmpty(goalTitle: enrichedGoal.title, description: enrichedGoal.description)
+        appState.goals.append(enrichedGoal)
+        if enrichedGoal.graph.nodes.contains(where: { $0.pinned }) {
+            appState.pinnedGoalIds.insert(enrichedGoal.id)
+        }
         save()
+        onboardingDelegate?.onboardingDidCreateGoal(enrichedGoal)
     }
     
     func updateGoal(_ goal: Goal) {
         if let index = appState.goals.firstIndex(where: { $0.id == goal.id }) {
             let oldGoal = appState.goals[index]
-            appState.goals[index] = goal
+            var updatedGoal = goal
+            updatedGoal.graph.ensureSeedIfEmpty(goalTitle: updatedGoal.title, description: updatedGoal.description)
+            appState.goals[index] = updatedGoal
+            if updatedGoal.graph.nodes.contains(where: { $0.pinned }) {
+                appState.pinnedGoalIds.insert(updatedGoal.id)
+            } else {
+                appState.pinnedGoalIds.remove(updatedGoal.id)
+            }
             
             // If emoji changed, propagate to related items
-            if oldGoal.emoji != goal.emoji {
-                propagateEmojiFromGoal(goal)
+            if oldGoal.emoji != updatedGoal.emoji {
+                propagateEmojiFromGoal(updatedGoal)
             }
         }
         save()
@@ -656,6 +1144,8 @@ class AppDataManager: ObservableObject {
     
     func removeGoal(id: UUID) {
         appState.goals.removeAll { $0.id == id }
+        appState.pinnedGoalIds.remove(id)
+        appState.goalFeedbackStats.removeValue(forKey: id)
         save()
     }
     
@@ -684,6 +1174,40 @@ class AppDataManager: ObservableObject {
         }
     }
     
+    // MARK: - Goal Graph Operations
+
+    func toggleGoalNodePin(goalId: UUID, nodeId: UUID) {
+        guard let goalIndex = appState.goals.firstIndex(where: { $0.id == goalId }) else { return }
+        var goal = appState.goals[goalIndex]
+        guard goal.graph.togglePin(for: nodeId) != nil else { return }
+        appState.goals[goalIndex] = goal
+        if goal.graph.nodes.contains(where: { $0.pinned }) {
+            appState.pinnedGoalIds.insert(goal.id)
+        } else {
+            appState.pinnedGoalIds.remove(goal.id)
+        }
+        save()
+    }
+
+    func regenerateGoalNode(goalId: UUID, nodeId: UUID, scope: GoalGraphRegenerateScope) {
+        guard let goalIndex = appState.goals.firstIndex(where: { $0.id == goalId }) else { return }
+        var goal = appState.goals[goalIndex]
+        goal.graph.ensureSeedIfEmpty(goalTitle: goal.title, description: goal.description)
+        switch scope {
+        case .refresh:
+            goal.graph.refreshNode(nodeId)
+        case .expand:
+            if let reference = goal.graph.nodes.first(where: { $0.id == nodeId }) {
+                _ = goal.graph.addSibling(near: reference, goalTitle: goal.title)
+            }
+        }
+        appState.goals[goalIndex] = goal
+        if goal.graph.nodes.contains(where: { $0.pinned }) {
+            appState.pinnedGoalIds.insert(goal.id)
+        }
+        save()
+    }
+
     // MARK: - Emoji Propagation & Relationship Management
     
     /// Propagate emoji changes from a goal to all related items
@@ -780,7 +1304,71 @@ class AppDataManager: ObservableObject {
             relatedPillarId: relatedPillarId
         )
     }
-    
+
+    // MARK: - To-Do Operations
+
+    func addTodoItem(_ item: TodoItem) {
+        appState.todoItems.append(item)
+        save()
+    }
+
+    func updateTodoItem(_ item: TodoItem) {
+        if let index = appState.todoItems.firstIndex(where: { $0.id == item.id }) {
+            appState.todoItems[index] = item
+            save()
+        }
+    }
+
+    func toggleTodoCompletion(_ todoId: UUID) {
+        if let index = appState.todoItems.firstIndex(where: { $0.id == todoId }) {
+            appState.todoItems[index].isCompleted.toggle()
+            save()
+        }
+    }
+
+    func removeTodoItem(_ todoId: UUID) {
+        appState.todoItems.removeAll { $0.id == todoId }
+        save()
+    }
+
+    func confirmFollowUpTodo(
+        _ todoId: UUID,
+        updatedTitle: String?,
+        startTime: Date,
+        endTime: Date,
+        notes: String?
+    ) {
+        guard let index = appState.todoItems.firstIndex(where: { $0.id == todoId }) else { return }
+        let item = appState.todoItems[index]
+        guard let followUp = item.followUp else { return }
+        let cleanTitle = updatedTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedTitle = cleanTitle?.isEmpty == false ? cleanTitle! : item.title
+        let cleanNotes = notes?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedNotes: String?
+        if let cleanNotes, !cleanNotes.isEmpty {
+            resolvedNotes = cleanNotes
+        } else if let itemNotes = item.notes, !itemNotes.isEmpty {
+            resolvedNotes = itemNotes
+        } else {
+            resolvedNotes = followUp.notesSnapshot
+        }
+        let minimumDuration: TimeInterval = 600
+        let safeEnd = max(endTime, startTime.addingTimeInterval(minimumDuration))
+        let record = Record(
+            blockId: followUp.blockId,
+            title: resolvedTitle,
+            startTime: startTime,
+            endTime: safeEnd,
+            notes: resolvedNotes,
+            energy: followUp.energy,
+            emoji: followUp.emoji,
+            confirmedAt: Date()
+        )
+        appState.records.append(record)
+        appState.todoItems.remove(at: index)
+        save()
+    }
+
     /// Link a time block to a goal and inherit its emoji
     func linkTimeBlockToGoal(_ blockId: UUID, goalId: UUID) {
         // Update current day blocks
@@ -841,7 +1429,13 @@ class AppDataManager: ObservableObject {
             emoji: suggestion.emoji,
             energy: suggestion.energy,
             duration: suggestion.duration,
-            confidence: suggestion.confidence
+            confidence: suggestion.confidence,
+            weight: suggestion.weight,
+            reason: suggestion.reason ?? suggestion.explanation,
+            relatedGoalId: suggestion.relatedGoalId,
+            relatedGoalTitle: suggestion.relatedGoalTitle,
+            relatedPillarId: suggestion.relatedPillarId,
+            relatedPillarTitle: suggestion.relatedPillarTitle
         )
         
         let behaviorEvent = BehaviorEvent(
@@ -853,6 +1447,93 @@ class AppDataManager: ObservableObject {
         )
         
         patternEngine.recordBehavior(behaviorEvent)
+        updateFeedbackStats(for: suggestion, positive: accepted)
+        save()
+    }
+
+    private func updateFeedbackStats(for suggestion: Suggestion, positive: Bool) {
+        let tags: [FeedbackTag] = positive ? [.useful] : [.notRelevant]
+        if let goalId = suggestion.relatedGoalId {
+            var stats = appState.goalFeedbackStats[goalId] ?? SuggestionFeedbackStats()
+            stats.register(tags: tags)
+            appState.goalFeedbackStats[goalId] = stats
+        }
+        if let pillarId = suggestion.relatedPillarId {
+            var stats = appState.pillarFeedbackStats[pillarId] ?? SuggestionFeedbackStats()
+            stats.register(tags: tags)
+            appState.pillarFeedbackStats[pillarId] = stats
+        }
+    }
+
+    func recordFeedback(
+        target: FeedbackTargetType,
+        targetId: UUID,
+        tags: [FeedbackTag],
+        comment: String?,
+        linkedGoalId: UUID? = nil,
+        linkedPillarId: UUID? = nil
+    ) {
+        let entry = FeedbackEntry(
+            targetType: target,
+            targetId: targetId,
+            tags: tags,
+            freeText: comment
+        )
+        appState.feedbackEntries.append(entry)
+        applyAggregatedFeedback(for: entry, linkedGoalId: linkedGoalId, linkedPillarId: linkedPillarId)
+        
+        let feedbackData = FeedbackBehaviorData(
+            targetType: target,
+            tags: tags,
+            comment: comment
+        )
+        let behaviorEvent = BehaviorEvent(
+            .feedbackGiven(feedbackData),
+            context: EventContext(
+                mood: appState.currentDay.mood
+            )
+        )
+        patternEngine.recordBehavior(behaviorEvent)
+        requestMicroUpdate(.feedback)
+        save()
+        onboardingDelegate?.onboardingDidSubmitFeedback(entry)
+    }
+    
+    private func applyAggregatedFeedback(for entry: FeedbackEntry, linkedGoalId: UUID?, linkedPillarId: UUID?) {
+        var goalIds = Set<UUID>()
+        var pillarIds = Set<UUID>()
+        if entry.targetType == .goal {
+            goalIds.insert(entry.targetId)
+        }
+        if entry.targetType == .pillar {
+            pillarIds.insert(entry.targetId)
+        }
+        if let goalId = linkedGoalId {
+            goalIds.insert(goalId)
+        }
+        if let pillarId = linkedPillarId {
+            pillarIds.insert(pillarId)
+        }
+        for id in goalIds {
+            applyFeedbackStats(toGoal: id, tags: entry.tags)
+        }
+        for id in pillarIds {
+            applyFeedbackStats(toPillar: id, tags: entry.tags)
+        }
+    }
+    
+    private func applyFeedbackStats(toGoal goalId: UUID, tags: [FeedbackTag]) {
+        guard appState.goals.contains(where: { $0.id == goalId }) else { return }
+        var stats = appState.goalFeedbackStats[goalId] ?? SuggestionFeedbackStats()
+        stats.register(tags: tags)
+        appState.goalFeedbackStats[goalId] = stats
+    }
+    
+    private func applyFeedbackStats(toPillar pillarId: UUID, tags: [FeedbackTag]) {
+        guard appState.pillars.contains(where: { $0.id == pillarId }) else { return }
+        var stats = appState.pillarFeedbackStats[pillarId] ?? SuggestionFeedbackStats()
+        stats.register(tags: tags)
+        appState.pillarFeedbackStats[pillarId] = stats
     }
     
     /// Record when chains are applied for pattern learning
@@ -875,9 +1556,199 @@ class AppDataManager: ObservableObject {
         patternEngine.recordBehavior(behaviorEvent)
     }
     
+    /// Resolve goal and pillar references on suggestions so downstream views have both IDs and titles
+    func resolveMetadata(for suggestions: [Suggestion]) -> [Suggestion] {
+        suggestions.map { suggestion in
+            var updated = suggestion
+            resolveGoalMetadata(for: &updated)
+            resolvePillarMetadata(for: &updated)
+            return updated
+        }
+    }
+    
+    private func resolveGoalMetadata(for suggestion: inout Suggestion) {
+        if let goalId = suggestion.relatedGoalId,
+           let goal = appState.goals.first(where: { $0.id == goalId }) {
+            if suggestion.relatedGoalTitle == nil {
+                suggestion.relatedGoalTitle = goal.title
+            }
+            loggedAmbiguousGoalSuggestions.remove(suggestion.id)
+            return
+        }
+        let candidates = matchGoals(for: suggestion)
+        guard !candidates.isEmpty else {
+            suggestion.relatedGoalId = nil
+            return
+        }
+        if candidates.count == 1, let match = candidates.first {
+            suggestion.relatedGoalId = match.id
+            suggestion.relatedGoalTitle = match.title
+            loggedAmbiguousGoalSuggestions.remove(suggestion.id)
+        } else {
+            handleAmbiguousLink(for: &suggestion, type: .goal, options: candidates.map { $0.title })
+        }
+    }
+
+    private func resolvePillarMetadata(for suggestion: inout Suggestion) {
+        if let pillarId = suggestion.relatedPillarId,
+           let pillar = appState.pillars.first(where: { $0.id == pillarId }) {
+            if suggestion.relatedPillarTitle == nil {
+                suggestion.relatedPillarTitle = pillar.name
+            }
+            loggedAmbiguousPillarSuggestions.remove(suggestion.id)
+            return
+        }
+        let candidates = matchPillars(for: suggestion)
+        guard !candidates.isEmpty else {
+            suggestion.relatedPillarId = nil
+            return
+        }
+        if candidates.count == 1, let match = candidates.first {
+            suggestion.relatedPillarId = match.id
+            suggestion.relatedPillarTitle = match.name
+            loggedAmbiguousPillarSuggestions.remove(suggestion.id)
+        } else {
+            handleAmbiguousLink(for: &suggestion, type: .pillar, options: candidates.map { $0.name })
+        }
+    }
+
+    private func matchGoals(for suggestion: Suggestion) -> [Goal] {
+        let titleMatches: [Goal]
+        if let normalizedTitle = normalizedTitle(from: suggestion.relatedGoalTitle) {
+            titleMatches = appState.goals.filter { matches($0.title, normalizedTitle) }
+        } else {
+            titleMatches = []
+        }
+        let hintMatches: [Goal]
+        if let hints = suggestion.linkHints {
+            var seen = Set<UUID>()
+            var matchesList: [Goal] = []
+            for hint in hints {
+                guard let normalizedHint = normalizedTitle(from: hint) else { continue }
+                for goal in appState.goals where matches(goal.title, normalizedHint) || matches(goal.description, normalizedHint) {
+                    if seen.insert(goal.id).inserted {
+                        matchesList.append(goal)
+                    }
+                }
+            }
+            hintMatches = matchesList
+        } else {
+            hintMatches = []
+        }
+        if !titleMatches.isEmpty {
+            if !hintMatches.isEmpty {
+                let hintIds = Set(hintMatches.map { $0.id })
+                let intersection = titleMatches.filter { hintIds.contains($0.id) }
+                if !intersection.isEmpty {
+                    return uniqueGoals(intersection)
+                }
+            }
+            return uniqueGoals(titleMatches)
+        }
+        if !hintMatches.isEmpty {
+            return uniqueGoals(hintMatches)
+        }
+        return []
+    }
+
+    private func matchPillars(for suggestion: Suggestion) -> [Pillar] {
+        let titleMatches: [Pillar]
+        if let normalizedTitle = normalizedTitle(from: suggestion.relatedPillarTitle) {
+            titleMatches = appState.pillars.filter { matches($0.name, normalizedTitle) }
+        } else {
+            titleMatches = []
+        }
+        let hintMatches: [Pillar]
+        if let hints = suggestion.linkHints {
+            var seen = Set<UUID>()
+            var matchesList: [Pillar] = []
+            for hint in hints {
+                guard let normalizedHint = normalizedTitle(from: hint) else { continue }
+                for pillar in appState.pillars where matches(pillar.name, normalizedHint) || matches(pillar.description, normalizedHint) {
+                    if seen.insert(pillar.id).inserted {
+                        matchesList.append(pillar)
+                    }
+                }
+            }
+            hintMatches = matchesList
+        } else {
+            hintMatches = []
+        }
+        if !titleMatches.isEmpty {
+            if !hintMatches.isEmpty {
+                let hintIds = Set(hintMatches.map { $0.id })
+                let intersection = titleMatches.filter { hintIds.contains($0.id) }
+                if !intersection.isEmpty {
+                    return uniquePillars(intersection)
+                }
+            }
+            return uniquePillars(titleMatches)
+        }
+        if !hintMatches.isEmpty {
+            return uniquePillars(hintMatches)
+        }
+        return []
+    }
+
+    private func uniqueGoals(_ goals: [Goal]) -> [Goal] {
+        var seen = Set<UUID>()
+        return goals.compactMap { goal in
+            if seen.insert(goal.id).inserted {
+                return goal
+            }
+            return nil
+        }
+    }
+
+    private func uniquePillars(_ pillars: [Pillar]) -> [Pillar] {
+        var seen = Set<UUID>()
+        return pillars.compactMap { pillar in
+            if seen.insert(pillar.id).inserted {
+                return pillar
+            }
+            return nil
+        }
+    }
+
+    private enum AmbiguityType { case goal, pillar }
+
+    private func handleAmbiguousLink(for suggestion: inout Suggestion, type: AmbiguityType, options: [String]) {
+        switch type {
+        case .goal:
+            suggestion.relatedGoalId = nil
+            if loggedAmbiguousGoalSuggestions.insert(suggestion.id).inserted {
+                print("⚠️ Ambiguous goal link for suggestion '\(suggestion.title)': \(options.joined(separator: ", "))")
+            }
+        case .pillar:
+            suggestion.relatedPillarId = nil
+            if loggedAmbiguousPillarSuggestions.insert(suggestion.id).inserted {
+                print("⚠️ Ambiguous pillar link for suggestion '\(suggestion.title)': \(options.joined(separator: ", "))")
+            }
+        }
+        if !(suggestion.reason?.localizedCaseInsensitiveContains("ambiguous link") ?? false) {
+            suggestion.reason = combinedReason(base: suggestion.reason, additions: ["ambiguous link"])
+        }
+    }
+    
+    private func normalizedTitle(from title: String?) -> String? {
+        guard let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else {
+            return nil
+        }
+        return title
+    }
+    
+    private func matches(_ lhs: String, _ rhs: String) -> Bool {
+        let lhsTrimmed = lhs.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rhsTrimmed = rhs.trimmingCharacters(in: .whitespacesAndNewlines)
+        if lhsTrimmed.localizedCaseInsensitiveCompare(rhsTrimmed) == .orderedSame {
+            return true
+        }
+        return lhsTrimmed.localizedCaseInsensitiveContains(rhsTrimmed) || rhsTrimmed.localizedCaseInsensitiveContains(lhsTrimmed)
+    }
+    
     /// Enhanced applySuggestion with pattern learning
     func applySuggestion(_ suggestion: Suggestion) {
-        let block = suggestion.toTimeBlock()
+        var block = suggestion.toTimeBlock()
         
         // Record that suggestion was accepted
         recordSuggestionFeedback(suggestion, accepted: true)
@@ -889,6 +1760,17 @@ class AppDataManager: ObservableObject {
         
         // Award XP for using AI suggestions
         appState.addXP(3, reason: "Applied AI suggestion")
+        if appState.preferences.eventKitEnabled {
+            Task { @MainActor in
+                do {
+                    let identifier = try await eventKitService.createEvent(from: block)
+                    attachEventKitIdentifier(block.id, identifier: identifier, lastModified: Date())
+                } catch {
+                    // EventKit write failures are non-fatal in cautious mode
+                }
+            }
+        }
+        requestMicroUpdate(.acceptedSuggestion)
     }
     
     /// Enhanced rejectSuggestion with pattern learning
@@ -902,6 +1784,7 @@ class AppDataManager: ObservableObject {
             appState.userPatterns.append(rejectionPattern)
         }
         save()
+        requestMicroUpdate(.rejectedSuggestion)
     }
     
     /// Get all items related to a specific emoji (for consistency checking)
@@ -941,6 +1824,7 @@ class EventKitService: ObservableObject {
     @Published var isAuthorized = false
     @Published var isProcessing = false
     @Published var lastSyncTime: Date?
+    @Published var lastChangeToken: Date = .distantPast
     
     private let eventStore = EKEventStore()
     
@@ -948,6 +1832,12 @@ class EventKitService: ObservableObject {
         Task {
             await requestCalendarAccess()
         }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleEventStoreChange),
+            name: .EKEventStoreChanged,
+            object: eventStore
+        )
     }
     
     // MARK: - Authorization
@@ -1012,6 +1902,16 @@ class EventKitService: ObservableObject {
         }
         
         return eventIds
+    }
+
+    func fetchEvents(start: Date, end: Date) -> [EKEvent] {
+        guard isAuthorized else { return [] }
+        let predicate = eventStore.predicateForEvents(withStart: start, end: end, calendars: nil)
+        return eventStore.events(matching: predicate)
+    }
+
+    @objc private func handleEventStoreChange(_ notification: Notification) {
+        lastChangeToken = Date()
     }
     
     func getDiagnostics() -> String {

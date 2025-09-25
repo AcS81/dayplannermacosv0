@@ -391,12 +391,15 @@ struct SuggestionsSection: View {
                 let newSuggestions = try await aiService.generateSuggestions(for: context)
                 
                 await MainActor.run {
-                    suggestions = newSuggestions
+                    let resolved = dataManager.resolveMetadata(for: newSuggestions)
+                    suggestions = dataManager.prioritizeSuggestions(resolved)
                     isLoading = false
                 }
             } catch {
                 await MainActor.run {
-                    suggestions = AIService.mockSuggestions()
+                    let mocks = AIService.mockSuggestions()
+                    let resolved = dataManager.resolveMetadata(for: mocks)
+                    suggestions = dataManager.prioritizeSuggestions(resolved)
                     isLoading = false
                 }
             }

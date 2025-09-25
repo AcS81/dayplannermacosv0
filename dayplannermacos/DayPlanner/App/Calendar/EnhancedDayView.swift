@@ -138,10 +138,12 @@ private extension EnhancedDayView {
     func startGhostRefresh(force: Bool = false) {
         stopGhostRefresh()
         refreshTask = Task { @MainActor in
-            await refreshGhosts(force: force)
+            let initialReason = dataManager.consumePendingMicroUpdate()
+            await refreshGhosts(force: force, reason: initialReason)
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: ghostRefreshInterval)
-                await refreshGhosts()
+                let reason = dataManager.consumePendingMicroUpdate()
+                await refreshGhosts(reason: reason)
             }
         }
     }
@@ -152,10 +154,10 @@ private extension EnhancedDayView {
     }
     
     @MainActor
-    func refreshGhosts(force: Bool = false) async {
+    func refreshGhosts(force: Bool = false, reason: MicroUpdateReason? = nil) async {
         guard showingRecommendations else { return }
-        let rawSuggestions = await generateGhostSuggestions(for: selectedDate)
-        var placedSuggestions = rawSuggestions
+        let rawSuggestions = await generateGhostSuggestions(for: selectedDate, reason: reason, forceLLM: force)
+        var placedSuggestions = dataManager.prioritizeSuggestions(rawSuggestions)
         assignTimes(to: &placedSuggestions, for: selectedDate)
         placedSuggestions = normalizeSuggestions(placedSuggestions)
         placedSuggestions.sort { $0.suggestedTime < $1.suggestedTime }
@@ -166,10 +168,11 @@ private extension EnhancedDayView {
             let validIDs = Set(placedSuggestions.map(\.id))
             selectedGhostIDs = selectedGhostIDs.intersection(validIDs)
         }
+        if let reason { dataManager.consumeMicroUpdate(reason: reason) }
     }
-    
+
     @MainActor
-    func generateGhostSuggestions(for date: Date) async -> [Suggestion] {
+    func generateGhostSuggestions(for date: Date, reason: MicroUpdateReason?, forceLLM: Bool) async -> [Suggestion] {
         let gaps = computeGaps(for: date)
         let availableTime = gaps.reduce(0) { $0 + $1.duration }
         let guidance = dataManager.appState.pillars.filter { $0.isPrinciple }.map { $0.aiGuidanceText }
@@ -185,11 +188,8 @@ private extension EnhancedDayView {
             pillarGuidance: guidance,
             actionablePillars: actionable
         )
-        do {
-            return try await aiService.generateSuggestions(for: context)
-        } catch {
-            return AIService.mockSuggestions()
-        }
+        let base = await dataManager.produceSuggestions(context: context, reason: reason, forceLLM: forceLLM, aiService: aiService)
+        return dataManager.resolveMetadata(for: base)
     }
     
     func assignTimes(to suggestions: inout [Suggestion], for date: Date) {
@@ -267,7 +267,13 @@ private extension EnhancedDayView {
                     energy: suggestion.energy,
                     emoji: suggestion.emoji,
                     explanation: suggestion.explanation,
-                    confidence: suggestion.confidence
+                    confidence: suggestion.confidence,
+                    weight: suggestion.weight,
+                    relatedGoalId: suggestion.relatedGoalId,
+                    relatedGoalTitle: suggestion.relatedGoalTitle,
+                    relatedPillarId: suggestion.relatedPillarId,
+                    relatedPillarTitle: suggestion.relatedPillarTitle,
+                    reason: suggestion.reason
                 )
             }
             return suggestion
@@ -314,7 +320,7 @@ private extension EnhancedDayView {
         selectedGhostIDs.subtract(acceptedIDs)
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
-            await refreshGhosts(force: true)
+            await refreshGhosts(force: true, reason: .acceptedSuggestion)
         }
     }
     

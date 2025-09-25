@@ -9,13 +9,14 @@ import SwiftUI
 
 struct CrystalPillarsSection: View {
     @EnvironmentObject private var dataManager: AppDataManager
+    @Environment(\.highlightedPillarId) private var highlightedPillarId
     @State private var showingPillarCreator = false
-    
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             SectionHeader(
                 title: "Pillars", 
-                subtitle: "Life foundations",
+                subtitle: "Principles the AI defends for you",
                 systemImage: "building.columns.circle",
                 gradient: LinearGradient(colors: [.purple, .pink], startPoint: .leading, endPoint: .trailing),
                 onAction: { showingPillarCreator = true }
@@ -26,9 +27,11 @@ struct CrystalPillarsSection: View {
                     showingPillarCreator = true
                 }
             } else {
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 2), spacing: 8) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 2), spacing: 8) {
                     ForEach(dataManager.appState.pillars) { pillar in
-                        EnhancedPillarCard(pillar: pillar)
+                        EnhancedPillarCard(
+                            pillar: pillar
+                        )
                     }
                 }
             }
@@ -640,6 +643,7 @@ struct TimeWindowCreatorSheet: View {
 struct EnhancedPillarCard: View {
     let pillar: Pillar
     @EnvironmentObject private var dataManager: AppDataManager
+    @Environment(\.highlightedPillarId) private var highlightedPillarId
     @State private var isHovering = false
     @State private var showingPillarDetail = false
     
@@ -670,11 +674,25 @@ struct EnhancedPillarCard: View {
         .buttonStyle(.plain)
         .frame(height: 100)
         .frame(maxWidth: .infinity)
-        .background(.ultraThinMaterial.opacity(isHovering ? 0.6 : 0.3), in: RoundedRectangle(cornerRadius: 10))
+        .background(backgroundShape, in: RoundedRectangle(cornerRadius: 10))
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(pillar.color.color.opacity(isHovering ? 0.5 : 0.2), lineWidth: 1)
+                .strokeBorder(borderColor, lineWidth: cardHighlighted ? 1.5 : 1)
         )
+        .overlay(alignment: .topTrailing) {
+            Button {
+                dataManager.togglePillarEmphasis(pillar.id)
+            } label: {
+                Image(systemName: isEmphasized ? "star.fill" : "star")
+                    .font(.caption)
+                    .foregroundStyle(isEmphasized ? .yellow : .secondary)
+                    .padding(6)
+                    .background(.ultraThinMaterial.opacity(0.6), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .help(isEmphasized ? "Remove emphasis for weighting" : "Emphasize to raise scheduling weight")
+            .opacity(isHovering ? 1 : 0.6)
+        }
         .scaleEffect(isHovering ? 1.02 : 1.0)
         // No animation to prevent flashing
         .onHover { hovering in 
@@ -685,6 +703,28 @@ struct EnhancedPillarCard: View {
                 dataManager.updatePillar(updatedPillar)
             }
         }
+    }
+
+    private var isEmphasized: Bool {
+        dataManager.isPillarEmphasized(pillar.id)
+    }
+    
+    private var backgroundShape: some ShapeStyle {
+        if cardHighlighted {
+            return pillar.color.color.opacity(0.28)
+        }
+        return .ultraThinMaterial.opacity(isHovering ? 0.6 : 0.3)
+    }
+    
+    private var borderColor: Color {
+        if cardHighlighted {
+            return pillar.color.color.opacity(0.7)
+        }
+        return pillar.color.color.opacity(isHovering ? 0.5 : 0.2)
+    }
+    
+    private var cardHighlighted: Bool {
+        highlightedPillarId == pillar.id
     }
 }
 

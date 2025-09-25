@@ -459,7 +459,9 @@ class PatternLearningEngine: ObservableObject {
                         energy: context.currentEnergy,
                         emoji: "💎",
                         explanation: "This is one of your peak focus hours",
-                        confidence: timePattern.confidence
+                        confidence: timePattern.confidence,
+                        weight: timePattern.confidence,
+                        reason: "Peak focus window detected"
                     ))
                 }
             }
@@ -483,7 +485,9 @@ class PatternLearningEngine: ObservableObject {
                         energy: context.currentEnergy,
                         emoji: sequence.emojis.first!,
                         explanation: "Following your successful activity pattern",
-                        confidence: activityPattern.confidence
+                        confidence: activityPattern.confidence,
+                        weight: activityPattern.confidence,
+                        reason: "Successful sequence from history"
                     ))
                 }
             }
@@ -547,6 +551,8 @@ class PatternLearningEngine: ObservableObject {
             }
         case .chainApplied(let chain):
             currentRecommendation = "Nice! The '\(chain.name)' pattern worked well. Want to create a routine?"
+        case .feedbackGiven(let feedback):
+            currentRecommendation = acknowledgement(for: feedback)
         default:
             break
         }
@@ -567,6 +573,22 @@ class PatternLearningEngine: ObservableObject {
     
     private func generateImprovementRecommendation(for block: TimeBlockData) -> String {
         return "No worries about \(block.emoji) \(block.title). Maybe try scheduling \(block.energy.description.lowercased()) activities at a different time?"
+    }
+    
+    private func acknowledgement(for feedback: FeedbackBehaviorData) -> String {
+        if feedback.tags.contains(.useful) {
+            return "Thanks! I'll surface more moves like that."
+        }
+        if feedback.tags.contains(.notRelevant) {
+            return "Understood—I'll dial that back."
+        }
+        if feedback.tags.contains(.wrongTime) {
+            return "Copy that. I'll shift the timing next cycle."
+        }
+        if feedback.tags.contains(.wrongPriority) {
+            return "Makes sense. Rebalancing that priority now."
+        }
+        return "Thanks for the feedback—updating my next pass."
     }
     
     /// Get suggestions for the action bar based on current patterns
@@ -595,7 +617,9 @@ class PatternLearningEngine: ObservableObject {
                         energy: .sunrise,
                         emoji: "💎",
                         explanation: "Based on your peak productivity patterns",
-                        confidence: timePattern.confidence
+                        confidence: timePattern.confidence,
+                        weight: timePattern.confidence,
+                        reason: "Peak productivity pattern"
                     ))
                 }
             }
@@ -622,7 +646,9 @@ class PatternLearningEngine: ObservableObject {
             energy: suggestedEnergy,
             emoji: "⚡",
             explanation: "Matched to your energy pattern preferences",
-            confidence: pattern.confidence
+            confidence: pattern.confidence,
+            weight: pattern.confidence,
+            reason: "Energy pattern alignment"
         )
     }
     
@@ -865,6 +891,8 @@ enum BehaviorEventType: Codable {
     case dayReviewed(DayData, rating: Int)
     case goalProgress(goalId: String, progress: Double)
     case pillarActivated(pillarId: String, duration: TimeInterval)
+    case feedbackGiven(FeedbackBehaviorData)
+    case moodLogged(MoodEntry)
 }
 
 // Simplified data structures for behavior tracking
@@ -891,6 +919,12 @@ struct SuggestionData: Codable {
     let energy: EnergyType
     let duration: TimeInterval
     let confidence: Double
+    let weight: Double?
+    let reason: String?
+    let relatedGoalId: UUID?
+    let relatedGoalTitle: String?
+    let relatedPillarId: UUID?
+    let relatedPillarTitle: String?
 }
 
 struct DayData: Codable {
@@ -899,6 +933,12 @@ struct DayData: Codable {
     let mood: GlassMood
     let blockCount: Int
     let completionRate: Double
+}
+
+struct FeedbackBehaviorData: Codable {
+    let targetType: FeedbackTargetType
+    let tags: [FeedbackTag]
+    let comment: String?
 }
 
 // MARK: - Strongly-Typed Pattern Data

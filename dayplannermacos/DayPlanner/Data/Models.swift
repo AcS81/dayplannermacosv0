@@ -22,7 +22,16 @@ struct TimeBlock: Identifiable, Codable, Equatable, Transferable {
     var glassState: GlassState = .solid
     var position: CGPoint = .zero // for drag interactions
     var relatedGoalId: UUID? // Link to related goal
+    var relatedGoalTitle: String? // Human-readable goal title snapshot
     var relatedPillarId: UUID? // Link to related pillar
+    var relatedPillarTitle: String? // Human-readable pillar title snapshot
+    var suggestionId: UUID? // Original suggestion identifier when AI created the block
+    var suggestionReason: String? // Why the recommender proposed this block
+    var suggestionWeight: Double? // Weight score used by recommender
+    var suggestionConfidence: Double? // Confidence score snapshot when accepted
+    var externalEventId: String? // EventKit identifier when synced
+    var externalLastModified: Date? // Track external edits
+    var origin: TimeBlockOrigin = .manual
     var notes: String? // Optional freeform notes
     var confirmationState: BlockConfirmationState = .scheduled
     
@@ -60,7 +69,16 @@ struct TimeBlock: Identifiable, Codable, Equatable, Transferable {
         glassState: GlassState = .solid,
         position: CGPoint = .zero,
         relatedGoalId: UUID? = nil,
+        relatedGoalTitle: String? = nil,
         relatedPillarId: UUID? = nil,
+        relatedPillarTitle: String? = nil,
+        suggestionId: UUID? = nil,
+        suggestionReason: String? = nil,
+        suggestionWeight: Double? = nil,
+        suggestionConfidence: Double? = nil,
+        externalEventId: String? = nil,
+        externalLastModified: Date? = nil,
+        origin: TimeBlockOrigin = .manual,
         notes: String? = nil,
         confirmationState: BlockConfirmationState = .scheduled
     ) {
@@ -73,7 +91,16 @@ struct TimeBlock: Identifiable, Codable, Equatable, Transferable {
         self.glassState = glassState
         self.position = position
         self.relatedGoalId = relatedGoalId
+        self.relatedGoalTitle = relatedGoalTitle
         self.relatedPillarId = relatedPillarId
+        self.relatedPillarTitle = relatedPillarTitle
+        self.suggestionId = suggestionId
+        self.suggestionReason = suggestionReason
+        self.suggestionWeight = suggestionWeight
+        self.suggestionConfidence = suggestionConfidence
+        self.externalEventId = externalEventId
+        self.externalLastModified = externalLastModified
+        self.origin = origin
         self.notes = notes
         self.confirmationState = confirmationState
     }
@@ -81,7 +108,7 @@ struct TimeBlock: Identifiable, Codable, Equatable, Transferable {
     // MARK: - Backward Compatibility & Migration
     
     private enum CodingKeys: String, CodingKey {
-        case id, title, startTime, duration, energy, emoji, glassState, position, relatedGoalId, relatedPillarId, notes, confirmationState
+        case id, title, startTime, duration, energy, emoji, glassState, position, relatedGoalId, relatedGoalTitle, relatedPillarId, relatedPillarTitle, suggestionId, suggestionReason, suggestionWeight, suggestionConfidence, externalEventId, externalLastModified, origin, notes, confirmationState
         case flow // Old system - for backward compatibility
     }
     
@@ -96,7 +123,16 @@ struct TimeBlock: Identifiable, Codable, Equatable, Transferable {
         glassState = try container.decodeIfPresent(GlassState.self, forKey: .glassState) ?? .solid
         position = try container.decodeIfPresent(CGPoint.self, forKey: .position) ?? .zero
         relatedGoalId = try container.decodeIfPresent(UUID.self, forKey: .relatedGoalId)
+        relatedGoalTitle = try container.decodeIfPresent(String.self, forKey: .relatedGoalTitle)
         relatedPillarId = try container.decodeIfPresent(UUID.self, forKey: .relatedPillarId)
+        relatedPillarTitle = try container.decodeIfPresent(String.self, forKey: .relatedPillarTitle)
+        suggestionId = try container.decodeIfPresent(UUID.self, forKey: .suggestionId)
+        suggestionReason = try container.decodeIfPresent(String.self, forKey: .suggestionReason)
+        suggestionWeight = try container.decodeIfPresent(Double.self, forKey: .suggestionWeight)
+        suggestionConfidence = try container.decodeIfPresent(Double.self, forKey: .suggestionConfidence)
+        externalEventId = try container.decodeIfPresent(String.self, forKey: .externalEventId)
+        externalLastModified = try container.decodeIfPresent(Date.self, forKey: .externalLastModified)
+        origin = try container.decodeIfPresent(TimeBlockOrigin.self, forKey: .origin) ?? (externalEventId == nil ? .manual : .external)
         notes = try container.decodeIfPresent(String.self, forKey: .notes)
         confirmationState = try container.decodeIfPresent(BlockConfirmationState.self, forKey: .confirmationState) ?? .scheduled
         
@@ -124,7 +160,18 @@ struct TimeBlock: Identifiable, Codable, Equatable, Transferable {
         try container.encode(glassState, forKey: .glassState)
         try container.encode(position, forKey: .position)
         try container.encodeIfPresent(relatedGoalId, forKey: .relatedGoalId)
+        try container.encodeIfPresent(relatedGoalTitle, forKey: .relatedGoalTitle)
         try container.encodeIfPresent(relatedPillarId, forKey: .relatedPillarId)
+        try container.encodeIfPresent(relatedPillarTitle, forKey: .relatedPillarTitle)
+        try container.encodeIfPresent(suggestionId, forKey: .suggestionId)
+        try container.encodeIfPresent(suggestionReason, forKey: .suggestionReason)
+        try container.encodeIfPresent(suggestionWeight, forKey: .suggestionWeight)
+        try container.encodeIfPresent(suggestionConfidence, forKey: .suggestionConfidence)
+        try container.encodeIfPresent(externalEventId, forKey: .externalEventId)
+        try container.encodeIfPresent(externalLastModified, forKey: .externalLastModified)
+        if origin != .manual || externalEventId != nil {
+            try container.encode(origin, forKey: .origin)
+        }
         try container.encodeIfPresent(notes, forKey: .notes)
         try container.encode(confirmationState, forKey: .confirmationState)
     }
@@ -458,6 +505,15 @@ enum GlassMood: String, Codable, CaseIterable {
         }
     }
     
+    var emoji: String {
+        switch self {
+        case .crystal: return "✨"
+        case .mist: return "🌫"
+        case .prism: return "🌈"
+        case .storm: return "⚡️"
+        }
+    }
+
     var backgroundGradient: LinearGradient {
         switch self {
         case .crystal:
@@ -484,10 +540,31 @@ struct Suggestion: Identifiable, Codable {
     var emoji: String
     var explanation: String
     var confidence: Double // 0.0 to 1.0
+    var weight: Double? // Relative priority from recommender
     var relatedGoalId: UUID? = nil
+    var relatedGoalTitle: String? = nil
     var relatedPillarId: UUID? = nil
+    var relatedPillarTitle: String? = nil
+    var reason: String? = nil
+    var linkHints: [String]? = nil
     
-    init(id: UUID = UUID(), title: String, duration: TimeInterval, suggestedTime: Date, energy: EnergyType, emoji: String, explanation: String, confidence: Double, relatedGoalId: UUID? = nil, relatedPillarId: UUID? = nil) {
+    init(
+        id: UUID = UUID(),
+        title: String,
+        duration: TimeInterval,
+        suggestedTime: Date,
+        energy: EnergyType,
+        emoji: String,
+        explanation: String,
+        confidence: Double,
+        weight: Double? = nil,
+        relatedGoalId: UUID? = nil,
+        relatedGoalTitle: String? = nil,
+        relatedPillarId: UUID? = nil,
+        relatedPillarTitle: String? = nil,
+        reason: String? = nil,
+        linkHints: [String]? = nil
+    ) {
         self.id = id
         self.title = title
         self.duration = duration
@@ -496,8 +573,13 @@ struct Suggestion: Identifiable, Codable {
         self.emoji = emoji
         self.explanation = explanation
         self.confidence = confidence
+        self.weight = weight
         self.relatedGoalId = relatedGoalId
+        self.relatedGoalTitle = relatedGoalTitle
         self.relatedPillarId = relatedPillarId
+        self.relatedPillarTitle = relatedPillarTitle
+        self.reason = reason
+        self.linkHints = linkHints
     }
     
     func toTimeBlock() -> TimeBlock {
@@ -507,9 +589,16 @@ struct Suggestion: Identifiable, Codable {
             duration: duration,
             energy: energy,
             emoji: emoji,
-            glassState: .crystal,
+            glassState: .liquid,
             relatedGoalId: relatedGoalId,
-            relatedPillarId: relatedPillarId
+            relatedGoalTitle: relatedGoalTitle,
+            relatedPillarId: relatedPillarId,
+            relatedPillarTitle: relatedPillarTitle,
+            suggestionId: id,
+            suggestionReason: reason ?? explanation,
+            suggestionWeight: weight,
+            suggestionConfidence: confidence,
+            origin: .suggestion
         )
     }
 }
@@ -584,6 +673,16 @@ struct AppState: Codable {
     var goals: [Goal] = []
     var dreamConcepts: [DreamConcept] = []
     var intakeQuestions: [IntakeQuestion] = []
+    var feedbackEntries: [FeedbackEntry] = []
+    var todoItems: [TodoItem] = []
+    var moodEntries: [MoodEntry] = []
+    var onboarding: OnboardingState = OnboardingState()
+    
+    // Scheduling emphasis and feedback signals
+    var pinnedGoalIds: Set<UUID> = []
+    var emphasizedPillarIds: Set<UUID> = []
+    var goalFeedbackStats: [UUID: SuggestionFeedbackStats] = [:]
+    var pillarFeedbackStats: [UUID: SuggestionFeedbackStats] = [:]
     
     // Helper methods
     mutating func addBlock(_ block: TimeBlock) {
@@ -616,6 +715,15 @@ enum BlockConfirmationState: String, Codable, CaseIterable {
     case scheduled
     case unconfirmed
     case confirmed
+}
+
+enum TimeBlockOrigin: String, Codable {
+    case manual
+    case suggestion
+    case onboarding
+    case external
+    case chain
+    case aiGenerated
 }
 
 struct Record: Identifiable, Codable {
@@ -662,11 +770,225 @@ struct UserPreferences: Codable {
     var openaiApiKey: String = ""
     var whisperApiKey: String = ""
     var customApiEndpoint: String = ""
+
+    // Suggestion weighting configuration
+    var suggestionWeighting: SuggestionWeighting = SuggestionWeighting()
+}
+
+struct SuggestionWeighting: Codable {
+    var pinBoost: Double = 0.25
+    var pillarBoost: Double = 0.15
+    var feedbackBoost: Double = 0.10
+}
+
+struct SuggestionFeedbackStats: Codable {
+    var positive: Int = 0
+    var negative: Int = 0
+
+    mutating func register(positive feedback: Bool) {
+        if feedback {
+            positive += 1
+        } else {
+            negative += 1
+        }
+    }
+
+    mutating func register(tags: [FeedbackTag]) {
+        let positives = tags.filter { $0.isPositive }.count
+        let negatives = tags.filter { $0.isNegative }.count
+        positive += positives
+        negative += negatives
+    }
+
+    var total: Int {
+        positive + negative
+    }
+
+    var netScore: Double {
+        guard total > 0 else { return 0 }
+        return Double(positive - negative) / Double(total)
+    }
+
+    var hasPositiveSignal: Bool {
+        netScore > 0
+    }
+}
+
+enum FeedbackTargetType: String, Codable {
+    case suggestion
+    case goal
+    case pillar
+}
+
+enum FeedbackTag: String, Codable, CaseIterable, Identifiable {
+    case useful = "👍 Useful"
+    case notRelevant = "👎 Not relevant"
+    case wrongTime = "⏱ Wrong time"
+    case wrongPriority = "🧠 Wrong priority"
+    
+    var id: String { rawValue }
+    
+    var emoji: String {
+        switch self {
+        case .useful: return "👍"
+        case .notRelevant: return "👎"
+        case .wrongTime: return "⏱"
+        case .wrongPriority: return "🧠"
+        }
+    }
+    
+    var label: String {
+        rawValue
+    }
+    
+    var isPositive: Bool {
+        self == .useful
+    }
+    
+    var isNegative: Bool {
+        self != .useful
+    }
+}
+
+struct FeedbackEntry: Identifiable, Codable {
+    let id: UUID
+    let targetType: FeedbackTargetType
+    let targetId: UUID
+    let tags: [FeedbackTag]
+    let freeText: String?
+    let timestamp: Date
+    
+    init(id: UUID = UUID(), targetType: FeedbackTargetType, targetId: UUID, tags: [FeedbackTag], freeText: String?, timestamp: Date = Date()) {
+        self.id = id
+        self.targetType = targetType
+        self.targetId = targetId
+        self.tags = tags
+        self.freeText = freeText
+        self.timestamp = timestamp
+    }
+    
+    var tagSummary: String {
+        tags.isEmpty ? "—" : tags.map(\.emoji).joined(separator: " ")
+    }
 }
 
 // MARK: - Extensions for UI
 
 // TimeBlock extensions are defined in Extensions.swift
+
+struct MoodEntry: Identifiable, Codable {
+    let id: UUID
+    let mood: GlassMood
+    let capturedAt: Date
+    let source: MoodCaptureSource
+    
+    init(id: UUID = UUID(), mood: GlassMood, capturedAt: Date = Date(), source: MoodCaptureSource = .launchPrompt) {
+        self.id = id
+        self.mood = mood
+        self.capturedAt = capturedAt
+        self.source = source
+    }
+}
+
+enum MoodCaptureSource: String, Codable {
+    case launchPrompt
+    case onboarding
+    case quickUpdate
+}
+
+enum OnboardingPhase: String, Codable {
+    case notStarted
+    case mood
+    case createEvent
+    case createPillar
+    case createGoal
+    case exploreGhosts
+    case feedback
+    case checklist
+    case completed
+}
+
+struct OnboardingState: Codable {
+    var phase: OnboardingPhase = .notStarted
+    var startedAt: Date?
+    var completedAt: Date?
+    var didCaptureMood: Bool = false
+    var didCreateEvent: Bool = false
+    var didCreatePillar: Bool = false
+    var didCreateGoal: Bool = false
+    var didAcceptGhost: Bool = false
+    var didSubmitFeedback: Bool = false
+    
+    var isComplete: Bool {
+        phase == .completed
+    }
+}
+
+// MARK: - To-Do & Follow-up Items
+
+struct FollowUpMetadata: Codable, Equatable {
+    var blockId: UUID
+    var originalTitle: String
+    var startTime: Date
+    var endTime: Date
+    var energy: EnergyType
+    var emoji: String
+    var notesSnapshot: String?
+    var capturedAt: Date
+
+    var duration: TimeInterval {
+        endTime.timeIntervalSince(startTime)
+    }
+}
+
+struct TodoItem: Identifiable, Codable, Equatable {
+    var id: UUID
+    var title: String
+    var dueDate: Date?
+    var isCompleted: Bool
+    var createdDate: Date
+    var notes: String?
+    var followUp: FollowUpMetadata?
+
+    init(
+        id: UUID = UUID(),
+        title: String,
+        dueDate: Date? = nil,
+        isCompleted: Bool = false,
+        createdDate: Date = Date(),
+        notes: String? = nil,
+        followUp: FollowUpMetadata? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.dueDate = dueDate
+        self.isCompleted = isCompleted
+        self.createdDate = createdDate
+        self.notes = notes
+        self.followUp = followUp
+    }
+
+    var isFollowUp: Bool {
+        followUp != nil
+    }
+
+    var markerLabel: String? {
+        isFollowUp ? "Past/Unconfirmed" : nil
+    }
+
+    var dueDateString: String {
+        guard let dueDate else { return "No due date" }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: dueDate)
+    }
+
+    func followUpRelativeString(reference: Date = Date()) -> String? {
+        guard let followUp else { return nil }
+        return followUp.startTime.formatted(.relative(presentation: .named, unitsStyle: .wide))
+    }
+}
 
 extension Chain {
     /// Create a sample chain for previews
@@ -839,8 +1161,22 @@ struct Goal: Identifiable, Codable {
     var progress: Double // 0.0 to 1.0
     var emoji: String // Visual identifier shared with related pillars/chains/events
     var relatedPillarIds: [UUID] // Links to supporting pillars
+    var graph: GoalGraph
     
-    init(id: UUID = UUID(), title: String, description: String, state: GoalState, importance: Int, groups: [GoalGroup], createdAt: Date = Date(), targetDate: Date? = nil, progress: Double = 0.0, emoji: String = "🎯", relatedPillarIds: [UUID] = []) {
+    init(
+        id: UUID = UUID(),
+        title: String,
+        description: String,
+        state: GoalState,
+        importance: Int,
+        groups: [GoalGroup],
+        createdAt: Date = Date(),
+        targetDate: Date? = nil,
+        progress: Double = 0.0,
+        emoji: String = "🎯",
+        relatedPillarIds: [UUID] = [],
+        graph: GoalGraph = GoalGraph()
+    ) {
         self.id = id
         self.title = title
         self.description = description
@@ -852,6 +1188,44 @@ struct Goal: Identifiable, Codable {
         self.progress = progress
         self.emoji = emoji
         self.relatedPillarIds = relatedPillarIds
+        self.graph = graph
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, description, state, importance, groups, createdAt, targetDate, progress, emoji, relatedPillarIds, graph
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
+        description = try container.decodeIfPresent(String.self, forKey: .description) ?? ""
+        state = try container.decodeIfPresent(GoalState.self, forKey: .state) ?? .draft
+        importance = try container.decodeIfPresent(Int.self, forKey: .importance) ?? 3
+        groups = try container.decodeIfPresent([GoalGroup].self, forKey: .groups) ?? []
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        targetDate = try container.decodeIfPresent(Date.self, forKey: .targetDate)
+        progress = try container.decodeIfPresent(Double.self, forKey: .progress) ?? 0.0
+        emoji = try container.decodeIfPresent(String.self, forKey: .emoji) ?? "🎯"
+        relatedPillarIds = try container.decodeIfPresent([UUID].self, forKey: .relatedPillarIds) ?? []
+        graph = try container.decodeIfPresent(GoalGraph.self, forKey: .graph) ?? GoalGraph()
+        graph.ensureSeedIfEmpty(goalTitle: title, description: description)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encode(description, forKey: .description)
+        try container.encode(state, forKey: .state)
+        try container.encode(importance, forKey: .importance)
+        try container.encode(groups, forKey: .groups)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encodeIfPresent(targetDate, forKey: .targetDate)
+        try container.encode(progress, forKey: .progress)
+        try container.encode(emoji, forKey: .emoji)
+        try container.encode(relatedPillarIds, forKey: .relatedPillarIds)
+        try container.encode(graph, forKey: .graph)
     }
     
     var isActive: Bool {
@@ -919,6 +1293,216 @@ struct GoalTask: Identifiable, Codable {
         self.suggestedChains = suggestedChains
         self.actionQuality = actionQuality
     }
+}
+
+// MARK: - GoalGraph (Mind Map)
+
+enum GoalGraphNodeType: String, Codable, CaseIterable, Identifiable {
+    case subgoal
+    case task
+    case note
+    case resource
+    case metric
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .subgoal: return "Sub-goal"
+        case .task: return "Task"
+        case .note: return "Note"
+        case .resource: return "Resource"
+        case .metric: return "Metric"
+        }
+    }
+
+    var glyph: String {
+        switch self {
+        case .subgoal: return "🎯"
+        case .task: return "🧩"
+        case .note: return "📝"
+        case .resource: return "📚"
+        case .metric: return "📈"
+        }
+    }
+
+    func seededTitle(goalTitle: String, index: Int) -> String {
+        switch self {
+        case .subgoal:
+            return "Anchor \(index): \(goalTitle)"
+        case .task:
+            return "Step \(index)"
+        case .note:
+            return "Insight \(index)"
+        case .resource:
+            return "Support \(index)"
+        case .metric:
+            return "Metric \(index)"
+        }
+    }
+}
+
+struct GoalGraphNode: Identifiable, Codable, Equatable {
+    let id: UUID
+    var type: GoalGraphNodeType
+    var title: String
+    var detail: String?
+    var pinned: Bool
+    var weight: Double
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        type: GoalGraphNodeType,
+        title: String,
+        detail: String? = nil,
+        pinned: Bool = false,
+        weight: Double = 0.35,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.type = type
+        self.title = title
+        self.detail = detail
+        self.pinned = pinned
+        self.weight = weight
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+struct GoalGraphEdge: Identifiable, Codable, Equatable {
+    let id: UUID
+    var from: UUID
+    var to: UUID
+    var label: String?
+
+    init(id: UUID = UUID(), from: UUID, to: UUID, label: String? = nil) {
+        self.id = id
+        self.from = from
+        self.to = to
+        self.label = label
+    }
+}
+
+struct GoalGraphHistoryEntry: Identifiable, Codable {
+    let id: UUID
+    var timestamp: Date
+    var summary: String
+    var nodeId: UUID?
+
+    init(id: UUID = UUID(), timestamp: Date = Date(), summary: String, nodeId: UUID? = nil) {
+        self.id = id
+        self.timestamp = timestamp
+        self.summary = summary
+        self.nodeId = nodeId
+    }
+}
+
+struct GoalGraph: Codable {
+    var nodes: [GoalGraphNode]
+    var edges: [GoalGraphEdge]
+    var history: [GoalGraphHistoryEntry]
+
+    init(
+        nodes: [GoalGraphNode] = [],
+        edges: [GoalGraphEdge] = [],
+        history: [GoalGraphHistoryEntry] = []
+    ) {
+        self.nodes = nodes
+        self.edges = edges
+        self.history = history
+    }
+}
+
+extension GoalGraph {
+    mutating func togglePin(for nodeId: UUID) -> GoalGraphNode? {
+        guard let index = nodes.firstIndex(where: { $0.id == nodeId }) else { return nil }
+        nodes[index].pinned.toggle()
+        nodes[index].updatedAt = Date()
+        history.append(
+            GoalGraphHistoryEntry(
+                summary: nodes[index].pinned ? "Pinned \(nodes[index].title)" : "Unpinned \(nodes[index].title)",
+                nodeId: nodeId
+            )
+        )
+        return nodes[index]
+    }
+
+    mutating func refreshNode(_ nodeId: UUID) {
+        guard let index = nodes.firstIndex(where: { $0.id == nodeId }) else { return }
+        nodes[index].updatedAt = Date()
+        // Light-touch adjustment to weight keeps the suggestion engine reactive without altering structure
+        let delta = min(0.1, max(-0.1, Double.random(in: -0.05...0.08)))
+        nodes[index].weight = max(0.1, min(1.0, nodes[index].weight + delta))
+        history.append(
+            GoalGraphHistoryEntry(
+                summary: "Refreshed \(nodes[index].title)",
+                nodeId: nodeId
+            )
+        )
+    }
+
+    mutating func addSibling(near node: GoalGraphNode, goalTitle: String) -> GoalGraphNode {
+        let siblingIndex = nodes.filter { $0.type == node.type }.count + 1
+        let title = node.type.seededTitle(goalTitle: goalTitle, index: siblingIndex)
+        var newNode = GoalGraphNode(type: node.type, title: title)
+        newNode.weight = max(node.weight - 0.05, 0.2)
+        nodes.append(newNode)
+        edges.append(
+            GoalGraphEdge(
+                from: node.id,
+                to: newNode.id,
+                label: node.type == .metric ? "tracks" : "supports"
+            )
+        )
+        history.append(
+            GoalGraphHistoryEntry(
+                summary: "Expanded \(node.type.displayName.lowercased()) with \(title)",
+                nodeId: newNode.id
+            )
+        )
+        return newNode
+    }
+
+    mutating func ensureSeedIfEmpty(goalTitle: String, description: String?) {
+        guard nodes.isEmpty else { return }
+        let anchor = GoalGraphNode(
+            type: .subgoal,
+            title: "Clarify \(goalTitle)",
+            detail: description ?? "Define why this matters",
+            weight: 0.45
+        )
+        let firstTask = GoalGraphNode(
+            type: .task,
+            title: "Next step",
+            detail: "Identify immediate action",
+            weight: 0.4
+        )
+        let note = GoalGraphNode(
+            type: .note,
+            title: "Context",
+            detail: description ?? "Capture motivation",
+            weight: 0.3
+        )
+        nodes = [anchor, firstTask, note]
+        edges = [
+            GoalGraphEdge(from: anchor.id, to: firstTask.id, label: "leads"),
+            GoalGraphEdge(from: anchor.id, to: note.id, label: "why")
+        ]
+        history.append(
+            GoalGraphHistoryEntry(
+                summary: "Seeded mind-map for \(goalTitle)"
+            )
+        )
+    }
+}
+
+enum GoalGraphRegenerateScope {
+    case refresh
+    case expand
 }
 
 /// Dream Builder: recurring desires/themes captured from chats and calendar notes

@@ -10,6 +10,44 @@ import UniformTypeIdentifiers
 
 // MARK: - App Tab Enum
 
+enum MindSection: String, CaseIterable, Identifiable {
+    case recommendations
+    case goals
+    case pillars
+    case view
+    
+    var id: String { rawValue }
+}
+
+enum MindDestination: Equatable {
+    case recommendations
+    case goals(targetId: UUID?)
+    case pillars(targetId: UUID?)
+    case view
+    
+    var section: MindSection {
+        switch self {
+        case .recommendations: return .recommendations
+        case .goals: return .goals
+        case .pillars: return .pillars
+        case .view: return .view
+        }
+    }
+}
+
+@MainActor
+final class MindNavigationModel: ObservableObject {
+    @Published private(set) var pendingDestination: MindDestination?
+    
+    func open(to destination: MindDestination) {
+        pendingDestination = destination
+    }
+    
+    func consumeDestination() {
+        pendingDestination = nil
+    }
+}
+
 enum AppTab: String, CaseIterable {
     case calendar = "calendar"
     case mind = "mind"
@@ -24,8 +62,21 @@ enum AppTab: String, CaseIterable {
 
 @main
 struct DayPlannerApp: App {
-    @StateObject private var dataManager = AppDataManager()
-    @StateObject private var aiService = AIService()
+    @StateObject private var dataManager: AppDataManager
+    @StateObject private var aiService: AIService
+    @StateObject private var mindNavigator = MindNavigationModel()
+    @StateObject private var onboardingCoordinator: OnboardingCoordinator
+
+    init() {
+        let dataManager = AppDataManager()
+        let aiService = AIService()
+        dataManager.patternEngine = PatternLearningEngine(dataManager: dataManager, aiService: aiService)
+        aiService.setPatternEngine(dataManager.patternEngine)
+        let onboarding = OnboardingCoordinator(dataManager: dataManager, aiService: aiService)
+        _dataManager = StateObject(wrappedValue: dataManager)
+        _aiService = StateObject(wrappedValue: aiService)
+        _onboardingCoordinator = StateObject(wrappedValue: onboarding)
+    }
     
     var body: some Scene {
         WindowGroup {
@@ -33,6 +84,9 @@ struct DayPlannerApp: App {
                 ContentView()
                     .environmentObject(dataManager)
                     .environmentObject(aiService)
+                    .environmentObject(dataManager.patternEngine)
+                    .environmentObject(mindNavigator)
+                    .environmentObject(onboardingCoordinator)
             }
             .frame(minWidth: 1000, minHeight: 700)
             .background(.ultraThinMaterial)
@@ -90,6 +144,8 @@ struct DayPlannerApp: App {
 struct ContentView: View {
     @EnvironmentObject private var dataManager: AppDataManager
     @EnvironmentObject private var aiService: AIService
+    @EnvironmentObject private var mindNavigator: MindNavigationModel
+    @EnvironmentObject private var onboarding: OnboardingCoordinator
     @State private var showingSettings = false
     @State private var showingAIDiagnostics = false
     @State private var selectedTab: AppTab = .calendar
@@ -157,6 +213,27 @@ struct ContentView: View {
                     Spacer()
                 }
             }
+
+            if dataManager.needsMoodPrompt {
+                VStack {
+                    MoodPromptBanner()
+                        .padding(.top, 52)
+                        .padding(.horizontal, 36)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                    Spacer()
+                }
+            } else if let entry = dataManager.todaysMoodEntry {
+                VStack {
+                    HStack {
+                        MoodStatusChip(entry: entry)
+                            .padding(.leading, 24)
+                        Spacer()
+                    }
+                    Spacer()
+                }
+                .allowsHitTesting(false)
+                .transition(.opacity)
+            }
             
             // Floating Action Bar - positioned as overlay
             VStack {
@@ -200,9 +277,12 @@ struct ContentView: View {
                 .padding(.bottom, 20)
             }
             
+            OnboardingOverlay()
+            
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView()
+                .environmentObject(dataManager)
         }
         .sheet(isPresented: $showingAIDiagnostics) {
             AIDiagnosticsView()
@@ -220,6 +300,13 @@ struct ContentView: View {
             setupAppAppearance()
             // Connect pattern engine to AI service
             aiService.setPatternEngine(dataManager.patternEngine)
+            onboarding.startIfNeeded()
+        }
+        .onChange(of: mindNavigator.pendingDestination) { destination in
+            guard destination != nil else { return }
+            withAnimation(.spring(response: 0.6, dampingFraction: 0.85)) {
+                showingMindPanel = true
+            }
         }
     }
     
@@ -232,4 +319,3 @@ struct ContentView: View {
         }
     }
 }
-

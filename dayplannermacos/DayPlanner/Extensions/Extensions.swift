@@ -133,6 +133,32 @@ extension Color {
     static let moonlightPurple = Color(hex: "AF52DE").opacity(0.3)
 }
 
+// MARK: - String Helpers
+
+extension String {
+    func badgeShortTitle(maxLength: Int = 14) -> String {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > maxLength else { return trimmed }
+        var result = ""
+        for word in trimmed.split(separator: " ") {
+            if result.isEmpty {
+                if word.count > maxLength {
+                    return String(trimmed.prefix(maxLength - 1)) + "…"
+                }
+                result = String(word)
+            } else if result.count + 1 + word.count <= maxLength {
+                result += " " + word
+            } else {
+                break
+            }
+        }
+        if result.isEmpty {
+            result = String(trimmed.prefix(maxLength - 1))
+        }
+        return result + "…"
+    }
+}
+
 // MARK: - View Extensions
 
 extension View {

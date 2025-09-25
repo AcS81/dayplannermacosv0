@@ -1,102 +1,34 @@
 //
-//  TodoViews.swift
+//  TodoListView.swift
 //  DayPlanner
 //
-//  To-Do List Components for Calendar Panel
+//  To-Do list with follow-up cluster for re-queued items
 //
 
 import SwiftUI
 
-// MARK: - To-Do Data Model
-
-struct TodoItem: Identifiable, Codable {
-    var id = UUID()
-    var title: String
-    var dueDate: Date?
-    var isCompleted: Bool = false
-    var createdDate: Date = Date()
-    
-    var dueDateString: String {
-        guard let dueDate = dueDate else { return "No due date" }
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        return formatter.string(from: dueDate)
-    }
-}
-
-// MARK: - To-Do List View
-
 struct TodoListView: View {
     @EnvironmentObject private var dataManager: AppDataManager
-    @State private var todoItems: [TodoItem] = []
-    @State private var newTodoTitle = ""
     @State private var showingAddTodo = false
+    @State private var followUpEditor: FollowUpEditorState?
+    
+    private var followUpItems: [TodoItem] {
+        dataManager.appState.todoItems.filter { $0.isFollowUp && !$0.isCompleted }
+    }
+    
+    private var activeItems: [TodoItem] {
+        dataManager.appState.todoItems.filter { !$0.isFollowUp && !$0.isCompleted }
+    }
+    
+    private var completedItems: [TodoItem] {
+        dataManager.appState.todoItems.filter { $0.isCompleted }
+    }
     
     var body: some View {
         VStack(spacing: 0) {
-            // To-Do Header
-            HStack {
-                Image(systemName: "checklist")
-                    .font(.title3)
-                    .foregroundStyle(.blue)
-                
-                Text("To-Do")
-                    .font(.headline)
-                    .fontWeight(.semibold)
-                
-                Spacer()
-                
-                Button(action: { showingAddTodo.toggle() }) {
-                    Image(systemName: "plus")
-                        .font(.title3)
-                        .foregroundStyle(.blue)
-                        .padding(6)
-                        .background(.blue.opacity(0.1), in: Circle())
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(.ultraThinMaterial.opacity(0.3))
-            
-            // To-Do Items List
-            if todoItems.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "checklist")
-                        .font(.largeTitle)
-                        .foregroundStyle(.secondary)
-                    
-                    Text("No pending items")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    
-                    Button("Add your first todo") {
-                        showingAddTodo = true
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding()
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(todoItems) { item in
-                            TodoItemRow(
-                                item: item,
-                                onToggleComplete: { toggleComplete(item) },
-                                onReschedule: { rescheduleItem(item) },
-                                onAddToTimeline: { addToTimeline(item) },
-                                onShowContextMenu: { showContextMenu(item) },
-                                onDelete: { deleteItem(item) },
-                                onDrag: { _ in dragItem(item) }
-                            )
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                }
-            }
+            header
+            Divider().opacity(0.05)
+            content
         }
         .background(.ultraThinMaterial.opacity(0.2), in: RoundedRectangle(cornerRadius: 12))
         .overlay(
@@ -105,185 +37,431 @@ struct TodoListView: View {
         )
         .sheet(isPresented: $showingAddTodo) {
             AddTodoSheet { title, dueDate in
-                addTodoItem(title: title, dueDate: dueDate)
+                let item = TodoItem(title: title, dueDate: dueDate)
+                dataManager.addTodoItem(item)
             }
         }
-        .onAppear {
-            loadTodoItems()
+        .sheet(item: $followUpEditor) { editor in
+            FollowUpConfirmSheet(editor: editor) { updated in
+                dataManager.confirmFollowUpTodo(
+                    updated.item.id,
+                    updatedTitle: updated.title,
+                    startTime: updated.start,
+                    endTime: updated.end,
+                    notes: updated.notes
+                )
+                followUpEditor = nil
+            }
         }
     }
     
-    private func loadTodoItems() {
-        // Load from data manager or create sample data
-        todoItems = [
-            TodoItem(title: "Review project proposal", dueDate: Calendar.current.date(byAdding: .day, value: 1, to: Date())),
-            TodoItem(title: "Call dentist for appointment", dueDate: nil),
-            TodoItem(title: "Buy groceries for weekend", dueDate: Calendar.current.date(byAdding: .day, value: 2, to: Date())),
-            TodoItem(title: "Prepare presentation slides", dueDate: Calendar.current.date(byAdding: .day, value: 3, to: Date()))
-        ]
+    private var header: some View {
+        HStack {
+            HStack(spacing: 8) {
+                Image(systemName: "checklist")
+                    .font(.title3)
+                    .foregroundStyle(.blue)
+                Text("To-Do")
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                if !followUpItems.isEmpty {
+                    Text("Follow-ups: \(followUpItems.count)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.orange.opacity(0.12), in: Capsule())
+                }
+            }
+            Spacer()
+            Button {
+                showingAddTodo = true
+            } label: {
+                Label("Add", systemImage: "plus")
+                    .labelStyle(.iconOnly)
+                    .font(.title3)
+                    .foregroundStyle(.blue)
+                    .padding(6)
+                    .background(.blue.opacity(0.12), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Add new to-do")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial.opacity(0.3))
     }
     
-    private func addTodoItem(title: String, dueDate: Date?) {
-        let newItem = TodoItem(title: title, dueDate: dueDate)
-        todoItems.append(newItem)
-    }
-    
-    private func toggleComplete(_ item: TodoItem) {
-        if let index = todoItems.firstIndex(where: { $0.id == item.id }) {
-            todoItems[index].isCompleted.toggle()
+    @ViewBuilder
+    private var content: some View {
+        if followUpItems.isEmpty && activeItems.isEmpty && completedItems.isEmpty {
+            EmptyTodosView(onAdd: { showingAddTodo = true })
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding()
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 16, pinnedViews: [.sectionHeaders]) {
+                    if !followUpItems.isEmpty {
+                        Section(header: sectionHeader(title: "Follow-up")) {
+                            VStack(spacing: 12) {
+                                ForEach(followUpItems) { item in
+                                    FollowUpRow(
+                                        item: item,
+                                        onConfirm: { followUpEditor = FollowUpEditorState(item: item) },
+                                        onDelete: { dataManager.removeTodoItem(item.id) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    
+                    if !activeItems.isEmpty {
+                        Section(header: sectionHeader(title: "Tasks")) {
+                            VStack(spacing: 10) {
+                                ForEach(activeItems) { item in
+                                    TodoRow(
+                                        item: item,
+                                        onToggle: { dataManager.toggleTodoCompletion(item.id) },
+                                        onDelete: { dataManager.removeTodoItem(item.id) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    
+                    if !completedItems.isEmpty {
+                        Section(header: sectionHeader(title: "Completed")) {
+                            VStack(spacing: 8) {
+                                ForEach(completedItems) { item in
+                                    CompletedRow(
+                                        item: item,
+                                        onToggle: { dataManager.toggleTodoCompletion(item.id) },
+                                        onDelete: { dataManager.removeTodoItem(item.id) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 18)
+            }
         }
     }
     
-    private func rescheduleItem(_ item: TodoItem) {
-        // TODO: Show date picker for rescheduling
-    }
-    
-    private func addToTimeline(_ item: TodoItem) {
-        // TODO: Add to timeline via drag and drop or direct action
-    }
-    
-    private func showContextMenu(_ item: TodoItem) {
-        // TODO: Show context menu with more options
-    }
-    
-    private func deleteItem(_ item: TodoItem) {
-        todoItems.removeAll { $0.id == item.id }
-    }
-    
-    private func dragItem(_ item: TodoItem) {
-        // This function is called when drag ends
-        // The actual drop handling is done by the timeline's drop delegate
-        // We could optionally remove the item from the todo list here if it was successfully dropped
-        // For now, we'll keep it in the todo list until explicitly completed
+    private func sectionHeader(title: String) -> some View {
+        HStack {
+            Text(title.uppercased())
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.bottom, 4)
     }
 }
 
-// MARK: - To-Do Item Row
+// MARK: - Follow-up UI
 
-struct TodoItemRow: View {
+private struct FollowUpRow: View {
     let item: TodoItem
-    let onToggleComplete: () -> Void
-    let onReschedule: () -> Void
-    let onAddToTimeline: () -> Void
-    let onShowContextMenu: () -> Void
+    let onConfirm: () -> Void
     let onDelete: () -> Void
-    let onDrag: (TodoItem) -> Void
-    @State private var isPressed = false
-    @State private var isHovering = false
-    @State private var isDragging = false
-    @State private var dragOffset: CGSize = .zero
+    
+    private var followUp: FollowUpMetadata {
+        item.followUp ?? FollowUpMetadata(
+            blockId: item.id,
+            originalTitle: item.title,
+            startTime: item.createdDate,
+            endTime: item.createdDate.addingTimeInterval(1800),
+            energy: .daylight,
+            emoji: "📋",
+            notesSnapshot: item.notes,
+            capturedAt: item.createdDate
+        )
+    }
+    
+    private var timeRangeText: String {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        let start = formatter.string(from: followUp.startTime)
+        let end = formatter.string(from: followUp.endTime)
+        let dayFormatter = DateFormatter()
+        dayFormatter.dateStyle = .medium
+        let day = dayFormatter.string(from: followUp.startTime)
+        return "\(day) • \(start) – \(end)"
+    }
     
     var body: some View {
-        HStack(spacing: 12) {
-            // Completion checkbox
-            Button(action: onToggleComplete) {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(followUp.originalTitle)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.primary)
+                Spacer()
+                Button(action: onConfirm) {
+                    Label("Confirm now", systemImage: "checkmark.circle")
+                        .font(.caption)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.green.opacity(0.18), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens confirmation editor for this past item")
+                
+                Menu {
+                    Button("Remove", role: .destructive, action: onDelete)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                }
+                .menuStyle(.borderlessButton)
+                .buttonStyle(.plain)
+            }
+            
+            HStack(spacing: 8) {
+                Text("Past/Unconfirmed")
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Color.orange.opacity(0.18), in: Capsule())
+                
+                Text(timeRangeText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                
+                if let notes = item.notes, !notes.isEmpty {
+                    Text("•")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    Text(notes)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(Color.orange.opacity(0.25), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.08), radius: 8, y: 3)
+    }
+}
+
+// MARK: - Standard To-Do Rows
+
+private struct TodoRow: View {
+    let item: TodoItem
+    let onToggle: () -> Void
+    let onDelete: () -> Void
+    
+    private var dueDateText: String? {
+        guard let dueDate = item.dueDate else { return nil }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        return formatter.string(from: dueDate)
+    }
+    
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Button(action: onToggle) {
                 Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
+                    .font(.title2)
                     .foregroundStyle(item.isCompleted ? .green : .secondary)
             }
             .buttonStyle(.plain)
             
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text(item.title)
                     .font(.subheadline)
                     .fontWeight(.medium)
-                    .strikethrough(item.isCompleted)
-                    .foregroundStyle(item.isCompleted ? .secondary : .primary)
+                    .foregroundStyle(.primary)
+                    .strikethrough(item.isCompleted, color: .primary.opacity(0.3))
                 
-                if item.dueDate != nil {
-                    HStack(spacing: 4) {
-                        Image(systemName: "calendar")
-                            .font(.caption2)
-                        Text(item.dueDateString)
-                            .font(.caption2)
-                    }
-                    .foregroundStyle(.blue)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
-                    .background(.blue.opacity(0.1), in: Capsule())
+                if let dueDateText {
+                    Text("Due \(dueDateText)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                
+                if let notes = item.notes, !notes.isEmpty {
+                    Text(notes)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
             }
             
             Spacer()
             
-            // Action buttons
-            HStack(spacing: 8) {
-                // Reschedule button
-                Button(action: onReschedule) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .padding(6)
-                        .background(.orange.opacity(0.1), in: Circle())
-                }
-                .buttonStyle(.plain)
-                .help("Reschedule")
-                
-                // Add to timeline button
-                Button(action: onAddToTimeline) {
-                    Image(systemName: "calendar.badge.plus")
-                        .font(.caption)
-                        .foregroundStyle(.blue)
-                        .padding(6)
-                        .background(.blue.opacity(0.1), in: Circle())
-                }
-                .buttonStyle(.plain)
-                .help("Add to timeline")
-                
-                // Context menu button
-                Button(action: onShowContextMenu) {
-                    Image(systemName: "ellipsis")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(6)
-                        .background(.secondary.opacity(0.1), in: Circle())
-                }
-                .buttonStyle(.plain)
-                .help("More options")
+            Menu {
+                Button(item.isCompleted ? "Mark as open" : "Mark as done", action: onToggle)
+                Divider()
+                Button("Delete", role: .destructive, action: onDelete)
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
             }
+            .menuStyle(.borderlessButton)
+            .buttonStyle(.plain)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.ultraThinMaterial.opacity(isDragging ? 0.6 : 0.3), in: RoundedRectangle(cornerRadius: 8))
+        .padding(12)
+        .background(.ultraThinMaterial.opacity(0.2), in: RoundedRectangle(cornerRadius: 10))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(.white.opacity(isDragging ? 0.3 : 0.1), lineWidth: isDragging ? 2 : 1)
-        )
-        .scaleEffect(isDragging ? 0.95 : (isPressed ? 0.98 : 1.0))
-        .offset(dragOffset)
-        .opacity(isDragging ? 0.8 : 1.0)
-        .shadow(color: .black.opacity(isDragging ? 0.2 : 0.05), radius: isDragging ? 4 : 1, y: isDragging ? 2 : 0)
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.2)) {
-                isHovering = hovering
-            }
-        }
-        .onDrag {
-            createDragProvider()
-        }
-        .gesture(
-            DragGesture()
-                .onChanged { value in
-                    isDragging = true
-                    dragOffset = value.translation
-                }
-                .onEnded { _ in
-                    isDragging = false
-                    dragOffset = .zero
-                    onDrag(item)
-                }
-        )
-        .onPressGesture(
-            onPress: { isPressed = true },
-            onRelease: { isPressed = false }
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(.white.opacity(0.08), lineWidth: 1)
         )
     }
+}
+
+private struct CompletedRow: View {
+    let item: TodoItem
+    let onToggle: () -> Void
+    let onDelete: () -> Void
     
-    private func createDragProvider() -> NSItemProvider {
-        // Create a detailed drag payload for todo item
-        let dueDateString = item.dueDate?.timeIntervalSince1970.description ?? "nil"
-        let dragPayload = "todo_item:\(item.title)|\(item.id.uuidString)|\(dueDateString)|\(item.isCompleted)"
-        return NSItemProvider(object: dragPayload as NSString)
+    var body: some View {
+        HStack(spacing: 12) {
+            Button(action: onToggle) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(.green)
+            }
+            .buttonStyle(.plain)
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .strikethrough(true, color: .secondary)
+                if let notes = item.notes, !notes.isEmpty {
+                    Text(notes)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer()
+            Button(role: .destructive, action: onDelete) {
+                Image(systemName: "trash")
+                    .font(.caption)
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(10)
+        .background(Color.green.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+// MARK: - Empty State
+
+private struct EmptyTodosView: View {
+    let onAdd: () -> Void
+    
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "checkmark.circle")
+                .font(.largeTitle)
+                .foregroundStyle(.secondary)
+            Text("All clear")
+                .font(.headline)
+            Text("Capture follow-ups or quick tasks to keep momentum.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Button("Add a to-do", action: onAdd)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+        }
+    }
+}
+
+// MARK: - Follow-up Editor
+
+private struct FollowUpEditorState: Identifiable {
+    let id = UUID()
+    let item: TodoItem
+    var title: String
+    var start: Date
+    var end: Date
+    var notes: String
+    
+    init(item: TodoItem) {
+        self.item = item
+        if let follow = item.followUp {
+            title = item.title
+            start = follow.startTime
+            end = follow.endTime
+            notes = item.notes ?? follow.notesSnapshot ?? ""
+        } else {
+            title = item.title
+            start = item.createdDate
+            end = item.createdDate.addingTimeInterval(1800)
+            notes = item.notes ?? ""
+        }
+    }
+}
+
+private struct FollowUpConfirmSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let editor: FollowUpEditorState
+    let onConfirm: (FollowUpEditorState) -> Void
+    
+    @State private var workingTitle: String
+    @State private var start: Date
+    @State private var end: Date
+    @State private var notes: String
+    
+    init(editor: FollowUpEditorState, onConfirm: @escaping (FollowUpEditorState) -> Void) {
+        self.editor = editor
+        self.onConfirm = onConfirm
+        _workingTitle = State(initialValue: editor.title)
+        _start = State(initialValue: editor.start)
+        _end = State(initialValue: editor.end)
+        _notes = State(initialValue: editor.notes)
+    }
+    
+    var body: some View {
+        NavigationView {
+            Form {
+                Section("Summary") {
+                    TextField("What happened?", text: $workingTitle)
+                    DatePicker("Start", selection: $start)
+                    DatePicker("End", selection: $end)
+                }
+                Section("Notes") {
+                    TextEditor(text: $notes)
+                        .frame(minHeight: 120)
+                }
+            }
+            .navigationTitle("Confirm past item")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { submit() }
+                        .disabled(workingTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .frame(minWidth: 420, minHeight: 420)
+    }
+    
+    private func submit() {
+        var updated = editor
+        updated.title = workingTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.start = start
+        updated.end = end
+        updated.notes = notes
+        onConfirm(updated)
+        dismiss()
     }
 }
 
@@ -301,44 +479,36 @@ struct AddTodoSheet: View {
         NavigationView {
             VStack(spacing: 20) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Todo Title")
+                    Text("To-do title")
                         .font(.headline)
-                    
-                    TextField("Enter todo title...", text: $title)
+                    TextField("Enter to-do…", text: $title)
                         .textFieldStyle(.roundedBorder)
                 }
                 
                 VStack(alignment: .leading, spacing: 8) {
                     Toggle("Set due date", isOn: $hasDueDate)
-                        .font(.headline)
-                    
                     if hasDueDate {
-                        DatePicker("Due date", selection: $dueDate, displayedComponents: .date)
+                        DatePicker("Due", selection: $dueDate, displayedComponents: [.date])
                             .datePickerStyle(.compact)
                     }
                 }
-                
                 Spacer()
             }
             .padding()
-            .navigationTitle("Add Todo")
+            .navigationTitle("Add to-do")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
+                    Button("Cancel") { dismiss() }
                 }
-                
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") {
-                        onAdd(title, hasDueDate ? dueDate : nil)
+                        onAdd(title.trimmingCharacters(in: .whitespacesAndNewlines), hasDueDate ? dueDate : nil)
                         dismiss()
                     }
-                    .disabled(title.isEmpty)
+                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
-        .frame(width: 400, height: 300)
+        .frame(width: 420, height: 320)
     }
 }
-

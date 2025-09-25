@@ -838,6 +838,10 @@ struct CleanEventCard: View {
                             .font(.caption)
                             .foregroundStyle(.blue.opacity(0.6))
                     }
+
+                    if block.suggestionId != nil, !connectionBadgeItems.isEmpty {
+                        ConnectionBadgeRow(items: connectionBadgeItems)
+                    }
                 }
                 
                 Spacer()
@@ -950,6 +954,54 @@ struct CleanEventCard: View {
                            minute: roundedMinute, 
                            second: 0, 
                            of: newTime) ?? newTime
+    }
+
+    private var linkedGoal: Goal? {
+        dataManager.appState.goals.first { $0.id == block.relatedGoalId }
+    }
+    
+    private var linkedPillar: Pillar? {
+        dataManager.appState.pillars.first { $0.id == block.relatedPillarId }
+    }
+    
+    private var resolvedGoalTitle: String? {
+        if let goal = linkedGoal { return goal.title }
+        return block.relatedGoalTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    
+    private var resolvedPillarTitle: String? {
+        if let pillar = linkedPillar { return pillar.name }
+        return block.relatedPillarTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    
+    private var connectionBadgeItems: [ConnectionBadgeItem] {
+        guard block.suggestionId != nil else { return [] }
+        var items: [ConnectionBadgeItem] = []
+        if let goalTitle = resolvedGoalTitle, !goalTitle.isEmpty {
+            items.append(
+                ConnectionBadgeItem(
+                    kind: .goal,
+                    id: block.relatedGoalId,
+                    fullTitle: goalTitle,
+                    reason: block.suggestionReason,
+                    icon: "target",
+                    tint: .blue
+                )
+            )
+        }
+        if let pillarTitle = resolvedPillarTitle, !pillarTitle.isEmpty {
+            items.append(
+                ConnectionBadgeItem(
+                    kind: .pillar,
+                    id: block.relatedPillarId,
+                    fullTitle: pillarTitle,
+                    reason: block.suggestionReason,
+                    icon: "building.columns",
+                    tint: .purple
+                )
+            )
+        }
+        return items
     }
 }
 
@@ -1375,5 +1427,3 @@ struct EventDetailsTab: View {
         .padding(24)
     }
 }
-
-

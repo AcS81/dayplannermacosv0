@@ -307,7 +307,13 @@ class AIService: ObservableObject {
                     emoji: "🤖",
                     energy: .daylight,
                     duration: 0,
-                    confidence: response.confidence
+                    confidence: response.confidence,
+                    weight: response.confidence,
+                    reason: "auto-response",
+                    relatedGoalId: nil,
+                    relatedGoalTitle: nil,
+                    relatedPillarId: nil,
+                    relatedPillarTitle: nil
                 )),
                 context: EventContext()
             )
@@ -776,6 +782,10 @@ class AIService: ObservableObject {
         - User's guiding principles when making any suggestion
         - How actionable pillars might need time slots
         - The user's current energy and mood state
+        - If aligning to a goal or pillar, include both the ID (when provided in context) and the human-readable title.
+        - When an ID is unknown, set it to null, include the best title you have, and add a `linkHints` array with 1-3 short unique strings we can fuzzy-match locally (nicknames, goal keywords, pillar traits).
+        - Populate the "reason" with a concise (<80 characters) justification tied to this context.
+        - Populate "weight" with a 0-1 priority score (mirror confidence when unsure).
         
         Please provide a helpful response and exactly 2 activity suggestions in this exact JSON format:
         {
@@ -787,7 +797,14 @@ class AIService: ObservableObject {
                     "duration": 60,
                     "energy": "sunrise|daylight|moonlight",
                     "emoji": "📋|💼|🎯|💡|🏃‍♀️|🍽️|etc",
-                    "confidence": 0.8
+                    "confidence": 0.8,
+                    "weight": 0.75,
+                    "reason": "Peak focus window from GoalGraph",
+                    "relatedGoalId": "uuid-or-null",
+                    "relatedGoalTitle": "Goal name if known or null",
+                    "relatedPillarId": "uuid-or-null",
+                    "relatedPillarTitle": "Pillar name if known or null",
+                    "linkHints": ["concise keyword"]
                 }
             ]
         }
@@ -859,6 +876,13 @@ class AIService: ObservableObject {
         do {
             let parsed = try JSONDecoder().decode(AIResponseJSON.self, from: jsonData)
             
+            func uuid(from rawValue: String?) -> UUID? {
+                guard let raw = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+                    return nil
+                }
+                return UUID(uuidString: raw)
+            }
+
             let suggestions = parsed.suggestions.prefix(2).map { suggestionJSON in
                 Suggestion(
                     title: suggestionJSON.title,
@@ -867,7 +891,14 @@ class AIService: ObservableObject {
                     energy: EnergyType(rawValue: suggestionJSON.energy) ?? .daylight,
                     emoji: suggestionJSON.emoji,
                     explanation: suggestionJSON.explanation,
-                    confidence: suggestionJSON.confidence
+                    confidence: suggestionJSON.confidence,
+                    weight: suggestionJSON.weight,
+                    relatedGoalId: uuid(from: suggestionJSON.relatedGoalId),
+                    relatedGoalTitle: suggestionJSON.relatedGoalTitle,
+                    relatedPillarId: uuid(from: suggestionJSON.relatedPillarId),
+                    relatedPillarTitle: suggestionJSON.relatedPillarTitle,
+                    reason: suggestionJSON.reason ?? suggestionJSON.explanation,
+                    linkHints: suggestionJSON.linkHints
                 )
             }
             
@@ -1019,14 +1050,26 @@ class AIService: ObservableObject {
                 throw AIError.invalidResponse
             }
             
+            func uuid(from anyValue: Any?) -> UUID? {
+                guard let rawString = anyValue as? String else { return nil }
+                return UUID(uuidString: rawString)
+            }
+            let explanation = eventData["explanation"] as? String ?? "AI-generated activity"
             let suggestion = Suggestion(
                 title: eventData["title"] as? String ?? "New Activity",
                 duration: TimeInterval((eventData["duration"] as? Int ?? 1800)),
                 suggestedTime: Date(),
                 energy: EnergyType(rawValue: eventData["energy"] as? String ?? "daylight") ?? .daylight,
                 emoji: eventData["emoji"] as? String ?? "📋",
-                explanation: eventData["explanation"] as? String ?? "AI-generated activity",
-                confidence: analysis.confidence
+                explanation: explanation,
+                confidence: analysis.confidence,
+                weight: (eventData["weight"] as? Double) ?? analysis.confidence,
+                relatedGoalId: uuid(from: eventData["relatedGoalId"]),
+                relatedGoalTitle: eventData["relatedGoalTitle"] as? String,
+                relatedPillarId: uuid(from: eventData["relatedPillarId"]),
+                relatedPillarTitle: eventData["relatedPillarTitle"] as? String,
+                reason: eventData["reason"] as? String ?? explanation,
+                linkHints: eventData["linkHints"] as? [String]
             )
             
             return AIResponse(
@@ -1290,7 +1333,11 @@ class AIService: ObservableObject {
         - How actionable pillars might need time slots
         - The user's current energy and mood state
         - The confidence level - adjust suggestion quality accordingly
-        
+        - If you mention a goal or pillar, include both its ID (if available) and its title.
+        - When an ID is unknown, set it to null, include the best title you have, and add a `linkHints` array with 1-3 short unique strings we can fuzzy-match locally (nicknames, goal keywords, pillar traits).
+        - Populate the "reason" with a short (<80 characters) justification tied to the current context.
+        - Populate "weight" with a 0-1 priority score (mirror confidence when unsure).
+
         Please provide a helpful response and exactly 2 activity suggestions in this exact JSON format:
         {
             "response": "Your helpful response text that acknowledges their principles",
@@ -1301,7 +1348,14 @@ class AIService: ObservableObject {
                     "duration": 60,
                     "energy": "sunrise|daylight|moonlight",
                     "emoji": "📋|💼|🎯|💡|🏃‍♀️|🍽️|etc",
-                    "confidence": \(analysis.confidence)
+                    "confidence": \(analysis.confidence),
+                    "weight": \(analysis.confidence),
+                    "reason": "Concise alignment statement",
+                    "relatedGoalId": "uuid-or-null",
+                    "relatedGoalTitle": "Goal name if known or null",
+                    "relatedPillarId": "uuid-or-null",
+                    "relatedPillarTitle": "Pillar name if known or null",
+                    "linkHints": ["concise keyword"]
                 }
             ]
         }
@@ -1323,6 +1377,13 @@ class AIService: ObservableObject {
         do {
             let parsed = try JSONDecoder().decode(AIResponseJSON.self, from: jsonData)
             
+            func uuid(from rawValue: String?) -> UUID? {
+                guard let raw = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+                    return nil
+                }
+                return UUID(uuidString: raw)
+            }
+
             let suggestions = parsed.suggestions.prefix(2).map { suggestionJSON in
                 Suggestion(
                     title: suggestionJSON.title,
@@ -1331,7 +1392,14 @@ class AIService: ObservableObject {
                     energy: EnergyType(rawValue: suggestionJSON.energy) ?? .daylight,
                     emoji: suggestionJSON.emoji,
                     explanation: suggestionJSON.explanation,
-                    confidence: suggestionJSON.confidence
+                    confidence: suggestionJSON.confidence,
+                    weight: suggestionJSON.weight,
+                    relatedGoalId: uuid(from: suggestionJSON.relatedGoalId),
+                    relatedGoalTitle: suggestionJSON.relatedGoalTitle,
+                    relatedPillarId: uuid(from: suggestionJSON.relatedPillarId),
+                    relatedPillarTitle: suggestionJSON.relatedPillarTitle,
+                    reason: suggestionJSON.reason ?? suggestionJSON.explanation,
+                    linkHints: suggestionJSON.linkHints
                 )
             }
             
@@ -1445,6 +1513,13 @@ private struct SuggestionJSON: Codable {
     let energy: String
     let emoji: String
     let confidence: Double
+    let weight: Double?
+    let reason: String?
+    let relatedGoalId: String?
+    let relatedGoalTitle: String?
+    let relatedPillarId: String?
+    let relatedPillarTitle: String?
+    let linkHints: [String]?
 }
 
 // MARK: - Errors
@@ -1482,7 +1557,9 @@ extension AIService {
                 energy: .sunrise,
                 emoji: "☕",
                 explanation: "Start your day mindfully",
-                confidence: 0.9
+                confidence: 0.9,
+                weight: 0.9,
+                reason: "Center yourself before deep work"
             ),
             Suggestion(
                 title: "Deep Work Session",
@@ -1491,7 +1568,9 @@ extension AIService {
                 energy: .sunrise,
                 emoji: "💼",
                 explanation: "Take advantage of morning focus",
-                confidence: 0.8
+                confidence: 0.8,
+                weight: 0.8,
+                reason: "Morning focus window"
             )
         ]
     }

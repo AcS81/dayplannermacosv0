@@ -43,6 +43,9 @@
 		4D0CD185F9D94C1D88B7569C /* RecordsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D73D597AF0454A82BCEC2D41 /* RecordsStore.swift */; };
 		42BC990AE7B34A74A6D8EFCA /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D342403AD3A4420F9250484F /* SettingsView.swift */; };
 		6E7A09A1853C422BB366DF46 /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03616FD602E94325A7C607B3 /* DiagnosticsView.swift */; };
+		1AA97C3BB4B2431282A0D4CC840F0A9D /* MoodPrompts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EA683EC3DB941409137C5636DB13B53 /* MoodPrompts.swift */; };
+		4662ECC22B1841D8B931AE52AA89C226 /* OnboardingCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 780E0F653BE04444897C0CF918E748D1 /* OnboardingCoordinator.swift */; };
+		BD04F8FEADD74150ACBBFA34C69B9655 /* OnboardingOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CDED9765DD144C4A6FCB2C6E5876546 /* OnboardingOverlay.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -84,6 +87,9 @@
 		D73D597AF0454A82BCEC2D41 /* RecordsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordsStore.swift; sourceTree = "<group>"; };
 		D342403AD3A4420F9250484F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		03616FD602E94325A7C607B3 /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
+		9EA683EC3DB941409137C5636DB13B53 /* MoodPrompts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Views/Shared/MoodPrompts.swift; sourceTree = "<group>"; };
+		780E0F653BE04444897C0CF918E748D1 /* OnboardingCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingCoordinator.swift; sourceTree = "<group>"; };
+		9CDED9765DD144C4A6FCB2C6E5876546 /* OnboardingOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingOverlay.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -132,6 +138,7 @@
 			isa = PBXGroup;
 			children = (
 				CE9FDF6C09D24F5BAA222E95 /* AppShell */,
+				9025B7BA9F7F4A129E7CD99B3C2480BD /* Onboarding */,
 				8982FC9F165A490593AB3615 /* Calendar */,
 				73DCDAD5AD9D4366ABE2D11E /* Mind */,
 				266B7821FE564F47B7433218 /* Records */,
@@ -200,8 +207,18 @@
 				2BDF91E64D624F4589BD8766 /* TopBarView.swift */,
 				0552D821918E476FBB6A0750 /* UnifiedSplitView.swift */,
 				E9049F1523604F2E825506CC /* ActionBarView.swift */,
+				9EA683EC3DB941409137C5636DB13B53 /* MoodPrompts.swift */,
 			);
 			path = AppShell;
+			sourceTree = "<group>";
+		};
+		9025B7BA9F7F4A129E7CD99B3C2480BD /* Onboarding */ = {
+			isa = PBXGroup;
+			children = (
+				780E0F653BE04444897C0CF918E748D1 /* OnboardingCoordinator.swift */,
+				9CDED9765DD144C4A6FCB2C6E5876546 /* OnboardingOverlay.swift */,
+			);
+			path = Onboarding;
 			sourceTree = "<group>";
 		};
 		8982FC9F165A490593AB3615 /* Calendar */ = {
@@ -333,6 +350,9 @@
 				A1234567890123456789012345678923 /* Extensions.swift in Sources */,
 				A1234567890123456789012345678947 /* CalendarDayView.swift in Sources */,
 				D5501D093BE547E2A4A0D24A /* AppMain.swift in Sources */,
+				4662ECC22B1841D8B931AE52AA89C226 /* OnboardingCoordinator.swift in Sources */,
+				BD04F8FEADD74150ACBBFA34C69B9655 /* OnboardingOverlay.swift in Sources */,
+				1AA97C3BB4B2431282A0D4CC840F0A9D /* MoodPrompts.swift in Sources */,
 				4380140437DB4C1EA7472F3E /* TopBarView.swift in Sources */,
 				E984863A39724B16B599EEA5 /* UnifiedSplitView.swift in Sources */,
 				48D5DCB1D3B347A28938924E /* ActionBarView.swift in Sources */,

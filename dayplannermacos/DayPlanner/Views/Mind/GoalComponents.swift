@@ -10,21 +10,27 @@ import SwiftUI
 struct EnhancedGoalsSection: View {
     @EnvironmentObject private var dataManager: AppDataManager
     @EnvironmentObject private var aiService: AIService
+    @Environment(\.highlightedGoalId) private var highlightedGoalId
     @State private var showingGoalCreator = false
     @State private var showingGoalBreakdown = false
     @State private var selectedGoal: Goal?
     @State private var showingGoalDetails = false
-    
+    @State private var feedbackGoal: Goal?
+    @State private var showingGoalFeedback = false
+    @State private var acknowledgedGoalId: UUID?
+    @State private var focusedGoalId: UUID?
+    @State private var refreshingNodeIds: Set<UUID> = []
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-            SectionHeader(
-                title: "Goals",
-                    subtitle: "Smart breakdown & tracking", 
-                systemImage: "target.circle",
-                gradient: LinearGradient(colors: [.green, .mint], startPoint: .leading, endPoint: .trailing)
-            )
-            
+                SectionHeader(
+                    title: "Goals",
+                    subtitle: "Map the arcs you want to move",
+                    systemImage: "target.circle",
+                    gradient: LinearGradient(colors: [.green, .mint], startPoint: .leading, endPoint: .trailing)
+                )
+                
                 Spacer()
                 
                 Button(action: { showingGoalCreator = true }) {
@@ -60,6 +66,39 @@ struct EnhancedGoalsSection: View {
                     }
                 }
             }
+            if !dataManager.appState.goals.isEmpty {
+                GoalGraphQuickCanvas(
+                    goals: dataManager.appState.goals,
+                    highlightedGoalId: highlightedGoalId,
+                    acknowledgedGoalId: acknowledgedGoalId,
+                    focusedGoalId: focusedGoalId,
+                    onSelect: { goal in focusedGoalId = goal.id },
+                    onFeedbackRequest: { goal in
+                        feedbackGoal = goal
+                        showingGoalFeedback = true
+                    }
+                )
+                .padding(.top, 6)
+            }
+            
+            if let goal = focusedGoal {
+                GoalGraphDetailView(
+                    goal: goal,
+                    refreshingNodeIds: refreshingNodeIds,
+                    onTogglePin: { nodeId in
+                        dataManager.toggleGoalNodePin(goal.id, nodeId: nodeId)
+                    },
+                    onRegenerate: { nodeId, scope in
+                        refreshingNodeIds.insert(nodeId)
+                        Task { @MainActor in
+                            dataManager.regenerateGoalNode(goal.id, nodeId: nodeId, scope: scope)
+                            refreshingNodeIds.remove(nodeId)
+                        }
+                    }
+                )
+                .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                .padding(.top, 12)
+            }
         }
         .sheet(isPresented: $showingGoalCreator) {
             EnhancedGoalCreatorSheet { newGoal in
@@ -91,6 +130,33 @@ struct EnhancedGoalsSection: View {
                     }
                 )
             }
+        }
+        .sheet(isPresented: $showingGoalFeedback) {
+            if let goal = feedbackGoal {
+                FeedbackComposerView(
+                    title: "Goal feedback",
+                    prompt: "Share how \(goal.title) should shape upcoming plans.",
+                    onSubmit: { tags, comment in
+                        submitGoalFeedback(for: goal, tags: tags, comment: comment)
+                    }
+                )
+                .frame(minWidth: 320)
+            }
+        }
+        .onAppear {
+            if focusedGoalId == nil {
+                focusedGoalId = dataManager.appState.goals.first?.id
+            }
+        }
+        .onChange(of: dataManager.appState.goals) { goals in
+            guard !goals.isEmpty else {
+                focusedGoalId = nil
+                return
+            }
+            if let focused = focusedGoalId, goals.contains(where: { $0.id == focused }) {
+                return
+            }
+            focusedGoalId = goals.first?.id
         }
     }
     
@@ -129,6 +195,32 @@ struct EnhancedGoalsSection: View {
         
         // Only show "Ready to apply?" message if there are staged items
     }
+    
+    private func submitGoalFeedback(for goal: Goal, tags: [FeedbackTag], comment: String) {
+        let trimmed = comment.trimmingCharacters(in: .whitespacesAndNewlines)
+        dataManager.recordFeedback(
+            target: .goal,
+            targetId: goal.id,
+            tags: tags,
+            comment: trimmed.isEmpty ? nil : trimmed
+        )
+        showingGoalFeedback = false
+        acknowledgedGoalId = goal.id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            if acknowledgedGoalId == goal.id {
+                acknowledgedGoalId = nil
+            }
+        }
+    }
+
+    private var focusedGoal: Goal? {
+        let goals = dataManager.appState.goals
+        guard !goals.isEmpty else { return nil }
+        if let focusedGoalId, let match = goals.first(where: { $0.id == focusedGoalId }) {
+            return match
+        }
+        return goals.first
+    }
 }
 
 // MARK: - Enhanced Goal Components
@@ -139,6 +231,8 @@ struct EnhancedGoalCard: View {
     let onBreakdown: () -> Void
     let onToggleState: () -> Void
     
+    @EnvironmentObject private var dataManager: AppDataManager
+    @Environment(\.highlightedGoalId) private var highlightedGoalId
     @State private var isHovering = false
     
     var body: some View {
@@ -168,6 +262,12 @@ struct EnhancedGoalCard: View {
                         .fontWeight(.medium)
                         .foregroundStyle(.primary)
                         .lineLimit(2)
+
+                    if isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
                     
                     Spacer()
                 }
@@ -200,6 +300,14 @@ struct EnhancedGoalCard: View {
             
             if isHovering {
                 HStack(spacing: 6) {
+                    Button(isPinned ? "Unpin" : "Pin") {
+                        dataManager.toggleGoalPin(goal.id)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                    .tint(isPinned ? .orange : .gray)
+                    .help(isPinned ? "Unpin from scheduling focus" : "Pin to raise scheduling priority")
+                    
                     Button("Breakdown") {
                         onBreakdown()
                     }
@@ -223,10 +331,10 @@ struct EnhancedGoalCard: View {
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(.ultraThinMaterial.opacity(isHovering ? 0.6 : 0.3))
+                .fill(backgroundColor)
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(goalStateColor.opacity(isHovering ? 0.4 : 0.2), lineWidth: 1)
+                        .strokeBorder(borderColor, lineWidth: cardHighlighted ? 1.5 : 1)
                 )
         )
         .scaleEffect(isHovering ? 1.02 : 1.0)
@@ -240,6 +348,430 @@ struct EnhancedGoalCard: View {
         case .draft: return .orange
         case .on: return .green
         case .off: return .gray
+        }
+    }
+
+    private var isPinned: Bool {
+        dataManager.isGoalPinned(goal.id)
+    }
+    
+    private var cardHighlighted: Bool {
+        highlightedGoalId == goal.id
+    }
+    
+    private var backgroundColor: Color {
+        if cardHighlighted { return Color.green.opacity(0.25) }
+        return Color(.sRGB, white: 1.0, opacity: 0.12)
+    }
+    
+    private var borderColor: Color {
+        if cardHighlighted { return Color.green.opacity(0.6) }
+        return goalStateColor.opacity(isHovering ? 0.4 : 0.2)
+    }
+}
+
+private struct GoalGraphQuickCanvas: View {
+    let goals: [Goal]
+    let highlightedGoalId: UUID?
+    let acknowledgedGoalId: UUID?
+    let focusedGoalId: UUID?
+    let onSelect: (Goal) -> Void
+    let onFeedbackRequest: (Goal) -> Void
+    
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 12) {
+                ForEach(goals) { goal in
+                    GoalGraphNodeView(
+                        goal: goal,
+                        isHighlighted: goal.id == highlightedGoalId,
+                        isAcknowledged: goal.id == acknowledgedGoalId,
+                        isFocused: goal.id == focusedGoalId,
+                        onSelect: { onSelect(goal) },
+                        onFeedback: { onFeedbackRequest(goal) }
+                    )
+                }
+            }
+            .padding(.vertical, 6)
+        }
+    }
+}
+
+private struct GoalGraphNodeView: View {
+    let goal: Goal
+    var isHighlighted: Bool
+    var isAcknowledged: Bool
+    var isFocused: Bool
+    let onSelect: () -> Void
+    let onFeedback: () -> Void
+    
+    @State private var isHovering = false
+    
+    var body: some View {
+        VStack(spacing: 6) {
+            ZStack {
+                Circle()
+                    .fill(nodeGradient)
+                    .frame(width: 60, height: 60)
+                    .overlay(
+                        Circle()
+                            .strokeBorder(Color.white.opacity(isFocused ? 0.35 : 0.15), lineWidth: isFocused ? 2 : 1)
+                    )
+                Text(goal.emoji)
+                    .font(.title3)
+            }
+            Text(goal.title.badgeShortTitle(maxLength: 16))
+                .font(.caption2)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+        }
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(backgroundColor)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(borderColor, lineWidth: isFocused ? 2 : (isHighlighted ? 1.6 : 1))
+        )
+        .overlay(alignment: .topTrailing) {
+            if goal.isActive {
+                Circle()
+                    .fill(Color.green.opacity(0.3))
+                    .frame(width: 6, height: 6)
+                    .padding(4)
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if isAcknowledged {
+                Text("Thanks")
+                    .font(.caption2)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.green.opacity(0.25), in: Capsule())
+                    .offset(y: 12)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
+        .onHover { hovering in isHovering = hovering }
+        .contextMenu {
+            Button("Preview goal", action: onSelect)
+            Button("Give feedback", action: onFeedback)
+        }
+        .animation(.easeInOut(duration: 0.18), value: isFocused)
+    }
+    
+    private var nodeGradient: LinearGradient {
+        LinearGradient(colors: [.green.opacity(0.45), .blue.opacity(0.35)], startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+    
+    private var backgroundColor: Color {
+        if isFocused { return Color.green.opacity(0.18) }
+        if isHighlighted { return Color.green.opacity(0.12) }
+        return Color.white.opacity(isHovering ? 0.08 : 0.04)
+    }
+    
+    private var borderColor: Color {
+        if isFocused { return .green.opacity(0.8) }
+        if isHighlighted { return .green.opacity(0.6) }
+        return .white.opacity(0.12)
+    }
+}
+
+private struct GoalGraphDetailView: View {
+    let goal: Goal
+    let refreshingNodeIds: Set<UUID>
+    let onTogglePin: (UUID) -> Void
+    let onRegenerate: (UUID, GoalGraphRegenerateScope) -> Void
+    
+    private var pinnedCount: Int {
+        goal.graph.nodes.filter { $0.pinned }.count
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                HStack(spacing: 8) {
+                    Text(goal.emoji)
+                        .font(.title2)
+                    Text(goal.title)
+                        .font(.headline)
+                        .fontWeight(.semibold)
+                        .lineLimit(2)
+                }
+                .foregroundStyle(.primary)
+                
+                Spacer()
+                
+                if pinnedCount > 0 {
+                    Text("Pinned nodes: \(pinnedCount)")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Color.orange.opacity(0.18), in: Capsule())
+                        .foregroundStyle(.orange)
+                }
+            }
+            
+            GoalGraphCanvasView(
+                goal: goal,
+                refreshingNodeIds: refreshingNodeIds,
+                onTogglePin: onTogglePin,
+                onRegenerate: onRegenerate
+            )
+            .frame(height: 280)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity)
+        .background(.ultraThinMaterial.opacity(0.45), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
+        )
+    }
+}
+
+private struct GoalGraphCanvasView: View {
+    let goal: Goal
+    let refreshingNodeIds: Set<UUID>
+    let onTogglePin: (UUID) -> Void
+    let onRegenerate: (UUID, GoalGraphRegenerateScope) -> Void
+    
+    var body: some View {
+        GeometryReader { geometry in
+            let layout = GoalGraphLayout(goal: goal, size: geometry.size)
+            ZStack {
+                Canvas { context, size in
+                    let edges = layout.edges()
+                    for entry in edges {
+                        var path = Path()
+                        path.move(to: entry.start)
+                        path.addLine(to: entry.end)
+                        context.stroke(path, with: .color(.white.opacity(0.14)), lineWidth: 1)
+                        if let label = entry.label, !label.isEmpty {
+                            let midPoint = CGPoint(
+                                x: (entry.start.x + entry.end.x) / 2,
+                                y: (entry.start.y + entry.end.y) / 2
+                            )
+                            let text = Text(label.uppercased())
+                                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                            context.draw(text.foregroundStyle(.secondary), at: midPoint)
+                        }
+                    }
+                }
+                .drawingGroup()
+                
+                GoalGraphRootView(goal: goal)
+                    .position(layout.center)
+                    .allowsHitTesting(false)
+                
+                ForEach(goal.graph.nodes) { node in
+                    GoalGraphNodeBubbleView(
+                        node: node,
+                        isRefreshing: refreshingNodeIds.contains(node.id),
+                        onTogglePin: { onTogglePin(node.id) },
+                        onRegenerate: { scope in onRegenerate(node.id, scope) }
+                    )
+                    .position(layout.position(for: node))
+                }
+            }
+        }
+    }
+}
+
+private struct GoalGraphNodeBubbleView: View {
+    let node: GoalGraphNode
+    let isRefreshing: Bool
+    let onTogglePin: () -> Void
+    let onRegenerate: (GoalGraphRegenerateScope) -> Void
+    
+    @State private var isHovering = false
+    
+    private var tint: Color {
+        switch node.type {
+        case .subgoal: return .green
+        case .task: return .blue
+        case .note: return .teal
+        case .resource: return .purple
+        case .metric: return .orange
+        }
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(node.type.glyph)
+                Text(node.title)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .lineLimit(2)
+            }
+            .foregroundStyle(.primary)
+            
+            if let detail = node.detail, !detail.isEmpty {
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            }
+            
+            HStack(spacing: 8) {
+                Text(String(format: "w %.2f", node.weight))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(node.pinned ? "Unpin" : "Pin") {
+                    onTogglePin()
+                }
+                .font(.caption2)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(tint.opacity(0.18), in: Capsule())
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(12)
+        .frame(width: 160, alignment: .leading)
+        .background(backgroundColor, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .strokeBorder(borderColor, lineWidth: 1.2)
+        )
+        .shadow(color: tint.opacity(0.25), radius: isHovering ? 12 : 6, y: 4)
+        .overlay(alignment: .topTrailing) {
+            if node.pinned {
+                Label("Pinned", systemImage: "pin.fill")
+                    .font(.caption2)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.orange.opacity(0.2), in: Capsule())
+                    .offset(y: -12)
+            }
+        }
+        .overlay {
+            if isRefreshing {
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color.black.opacity(0.3))
+                ProgressView()
+                    .controlSize(.small)
+            }
+        }
+        .contextMenu {
+            Button("Refresh insight") { onRegenerate(.refresh) }
+            Button("Expand around this") { onRegenerate(.expand) }
+            Divider()
+            Button(node.pinned ? "Unpin" : "Pin", action: onTogglePin)
+        }
+        .onHover { hovering in isHovering = hovering }
+        .animation(.easeInOut(duration: 0.2), value: isHovering)
+    }
+    
+    private var backgroundColor: Color {
+        tint.opacity(0.18)
+    }
+    
+    private var borderColor: Color {
+        tint.opacity(0.35)
+    }
+}
+
+private struct GoalGraphRootView: View {
+    let goal: Goal
+    
+    var body: some View {
+        VStack(spacing: 6) {
+            Text(goal.emoji)
+                .font(.largeTitle)
+            Text(goal.title)
+                .font(.footnote)
+                .fontWeight(.semibold)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+            if !goal.description.isEmpty {
+                Text(goal.description)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+            }
+        }
+        .padding(14)
+        .frame(width: 160)
+        .background(.ultraThinMaterial.opacity(0.8), in: RoundedRectangle(cornerRadius: 18))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .strokeBorder(.white.opacity(0.2), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.2), radius: 12, y: 6)
+    }
+}
+
+private struct GoalGraphLayout {
+    struct EdgeRepresentation {
+        let start: CGPoint
+        let end: CGPoint
+        let label: String?
+    }
+    
+    let goal: Goal
+    let size: CGSize
+    
+    var center: CGPoint {
+        CGPoint(x: size.width / 2, y: size.height / 2)
+    }
+    
+    func position(for node: GoalGraphNode) -> CGPoint {
+        let peers = goal.graph.nodes.filter { $0.type == node.type }
+        guard let index = peers.firstIndex(of: node) else { return center }
+        let count = max(1, peers.count)
+        let angle = angleOffset(for: node.type) + (2 * .pi * Double(index) / Double(count))
+        let radius = radius(for: node.type)
+        let x = center.x + CGFloat(cos(angle)) * radius
+        let y = center.y + CGFloat(sin(angle)) * radius
+        return CGPoint(x: x, y: y)
+    }
+    
+    func edges() -> [EdgeRepresentation] {
+        if goal.graph.edges.isEmpty {
+            return goal.graph.nodes.map { node in
+                EdgeRepresentation(start: center, end: position(for: node), label: nil)
+            }
+        }
+        return goal.graph.edges.compactMap { edge in
+            guard
+                let fromNode = goal.graph.nodes.first(where: { $0.id == edge.from }),
+                let toNode = goal.graph.nodes.first(where: { $0.id == edge.to })
+            else {
+                return nil
+            }
+            return EdgeRepresentation(
+                start: position(for: fromNode),
+                end: position(for: toNode),
+                label: edge.label
+            )
+        }
+    }
+    
+    private func radius(for type: GoalGraphNodeType) -> CGFloat {
+        let base = min(size.width, size.height) * 0.22
+        switch type {
+        case .subgoal: return base
+        case .task: return base * 1.5
+        case .note: return base * 1.85
+        case .resource: return base * 2.05
+        case .metric: return base * 2.25
+        }
+    }
+    
+    private func angleOffset(for type: GoalGraphNodeType) -> Double {
+        switch type {
+        case .subgoal: return 0
+        case .task: return .pi / 6
+        case .note: return .pi / 3
+        case .resource: return .pi / 2
+        case .metric: return .pi / 1.5
         }
     }
 }

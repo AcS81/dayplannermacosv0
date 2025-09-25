@@ -439,18 +439,30 @@ struct FloatingActionBarView: View {
             if let firstSuggestion = response.suggestions.first {
                 let targetTime = extractDateFromMessage(message) ?? findNextAvailableTime(after: Date())
                 
-                // Create fully populated time block
-                let timeBlock = TimeBlock(
-                    title: firstSuggestion.title,
-                    startTime: targetTime,
-                    duration: firstSuggestion.duration,
-                    energy: firstSuggestion.energy,
-                    emoji: firstSuggestion.emoji,
-                    glassState: .crystal, // AI-created
-                    relatedGoalId: findRelatedGoal(for: firstSuggestion.title)?.id,
-                    relatedPillarId: findRelatedPillar(for: firstSuggestion.title)?.id
-                )
+                // Create fully populated time block while preserving suggestion metadata
+                var timeBlock = firstSuggestion.toTimeBlock()
+                timeBlock.startTime = targetTime
                 
+                if timeBlock.relatedGoalId == nil,
+                   let matchedGoal = findRelatedGoal(for: firstSuggestion.title) {
+                    timeBlock.relatedGoalId = matchedGoal.id
+                    timeBlock.relatedGoalTitle = matchedGoal.title
+                } else if let goalId = timeBlock.relatedGoalId,
+                          timeBlock.relatedGoalTitle == nil,
+                          let goal = dataManager.appState.goals.first(where: { $0.id == goalId }) {
+                    timeBlock.relatedGoalTitle = goal.title
+                }
+                
+                if timeBlock.relatedPillarId == nil,
+                   let matchedPillar = findRelatedPillar(for: firstSuggestion.title) {
+                    timeBlock.relatedPillarId = matchedPillar.id
+                    timeBlock.relatedPillarTitle = matchedPillar.name
+                } else if let pillarId = timeBlock.relatedPillarId,
+                          timeBlock.relatedPillarTitle == nil,
+                          let pillar = dataManager.appState.pillars.first(where: { $0.id == pillarId }) {
+                    timeBlock.relatedPillarTitle = pillar.name
+                }
+
                 dataManager.addTimeBlock(timeBlock)
                 
                 // Award XP for successful AI scheduling
@@ -1009,4 +1021,3 @@ struct AIMessage: Identifiable {
     let isUser: Bool
     let timestamp: Date
 }
-

@@ -8,6 +8,7 @@ struct EnhancedGoalCard: View {
     let onBreakdown: () -> Void
     let onToggleState: () -> Void
     
+    @EnvironmentObject private var dataManager: AppDataManager
     @State private var isHovering = false
     
     var body: some View {
@@ -37,6 +38,12 @@ struct EnhancedGoalCard: View {
                         .fontWeight(.medium)
                         .foregroundStyle(.primary)
                         .lineLimit(2)
+
+                    if isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
                     
                     Spacer()
                 }
@@ -69,6 +76,14 @@ struct EnhancedGoalCard: View {
             
             if isHovering {
                 HStack(spacing: 6) {
+                    Button(isPinned ? "Unpin" : "Pin") {
+                        dataManager.toggleGoalPin(goal.id)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                    .tint(isPinned ? .orange : .gray)
+                    .help(isPinned ? "Unpin from scheduling focus" : "Pin to raise scheduling priority")
+                    
                     Button("Breakdown") {
                         onBreakdown()
                     }
@@ -110,6 +125,10 @@ struct EnhancedGoalCard: View {
         case .on: return .green
         case .off: return .gray
         }
+    }
+
+    private var isPinned: Bool {
+        dataManager.isGoalPinned(goal.id)
     }
 }
 
@@ -704,4 +723,3 @@ struct EmptyStateCard: View {
         )
     }
 }
-

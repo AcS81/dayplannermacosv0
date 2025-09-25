@@ -225,6 +225,9 @@ struct AITrustSettingsView: View {
     @State private var openaiApiKey = ""
     @State private var whisperApiKey = ""
     @State private var customApiEndpoint = ""
+    @State private var pinBoost: Double = 0.25
+    @State private var pillarBoost: Double = 0.15
+    @State private var feedbackBoost: Double = 0.10
     
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -306,12 +309,80 @@ struct AITrustSettingsView: View {
                         .foregroundColor(.secondary)
                 }
             }
+
+            SettingsGroup("Recommendation Weighting") {
+                WeightSliderRow(
+                    title: "Pinned goals",
+                    value: $pinBoost,
+                    range: 0...0.5,
+                    description: "Boost applied when a suggestion matches a pinned goal"
+                ) { updateWeighting() }
+
+                WeightSliderRow(
+                    title: "Emphasized pillars",
+                    value: $pillarBoost,
+                    range: 0...0.5,
+                    description: "Additional weight for suggestions aligned with emphasized pillars"
+                ) { updateWeighting() }
+
+                WeightSliderRow(
+                    title: "Positive feedback",
+                    value: $feedbackBoost,
+                    range: 0...0.5,
+                    description: "Adaptive boost from prior thumbs-up"
+                ) { updateWeighting() }
+            }
         }
         .onAppear {
             safeMode = dataManager.appState.preferences.safeMode
             openaiApiKey = dataManager.appState.preferences.openaiApiKey
             whisperApiKey = dataManager.appState.preferences.whisperApiKey
             customApiEndpoint = dataManager.appState.preferences.customApiEndpoint
+            let weighting = dataManager.appState.preferences.suggestionWeighting
+            pinBoost = weighting.pinBoost
+            pillarBoost = weighting.pillarBoost
+            feedbackBoost = weighting.feedbackBoost
+        }
+    }
+
+    private func updateWeighting() {
+        dataManager.appState.preferences.suggestionWeighting = SuggestionWeighting(
+            pinBoost: pinBoost,
+            pillarBoost: pillarBoost,
+            feedbackBoost: feedbackBoost
+        )
+        dataManager.save()
+    }
+}
+
+private struct WeightSliderRow: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let description: String
+    let onChange: () -> Void
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                Spacer()
+                Text(String(format: "%.2f", value))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Slider(value: Binding(
+                get: { value },
+                set: { newValue in
+                    value = newValue
+                    onChange()
+                }
+            ), in: range, step: 0.05)
+            Text(description)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
     }
 }
@@ -946,4 +1017,3 @@ struct HistoryLogView: View {
         .frame(width: 600, height: 400)
     }
 }
-

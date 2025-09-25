@@ -87,18 +87,43 @@ private struct GhostEventCard: View {
         return dataManager.appState.pillars.first { $0.id == id }
     }
     
-    private func connectionBadge(title: String, color: Color, systemImage: String) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: systemImage)
-                .font(.caption2)
-            Text(title)
-                .font(.caption2)
-                .fontWeight(.semibold)
+    private var connectionBadgeItems: [ConnectionBadgeItem] {
+        var items: [ConnectionBadgeItem] = []
+        if let goalTitle = resolvedGoalTitle {
+            items.append(
+                ConnectionBadgeItem(
+                    kind: .goal,
+                    id: suggestion.relatedGoalId,
+                    fullTitle: goalTitle,
+                    reason: suggestion.reason ?? suggestion.explanation,
+                    icon: "target",
+                    tint: .cyan
+                )
+            )
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 3)
-        .background(color.opacity(0.18), in: Capsule())
-        .foregroundStyle(color)
+        if let pillarTitle = resolvedPillarTitle {
+            items.append(
+                ConnectionBadgeItem(
+                    kind: .pillar,
+                    id: suggestion.relatedPillarId,
+                    fullTitle: pillarTitle,
+                    reason: suggestion.reason ?? suggestion.explanation,
+                    icon: "building.columns",
+                    tint: .purple
+                )
+            )
+        }
+        return items
+    }
+    
+    private var resolvedGoalTitle: String? {
+        if let goal = linkedGoal { return goal.title }
+        return suggestion.relatedGoalTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    
+    private var resolvedPillarTitle: String? {
+        if let pillar = linkedPillar { return pillar.name }
+        return suggestion.relatedPillarTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     
     var body: some View {
@@ -140,16 +165,8 @@ private struct GhostEventCard: View {
                         }
                     }
 
-                    if linkedGoal != nil || linkedPillar != nil {
-                        HStack(spacing: 6) {
-                            if let goal = linkedGoal {
-                                connectionBadge(title: goal.title, color: .cyan, systemImage: "target")
-                            }
-                            if let pillar = linkedPillar {
-                                connectionBadge(title: pillar.name, color: .purple, systemImage: "building.columns")
-                            }
-                            Spacer()
-                        }
+                    if !connectionBadgeItems.isEmpty {
+                        ConnectionBadgeRow(items: connectionBadgeItems)
                     }
                     
                     if !suggestion.explanation.isEmpty {
@@ -207,6 +224,90 @@ private struct TagView: View {
         .padding(.vertical, 3)
         .background(Color.white.opacity(0.12), in: Capsule())
         .foregroundStyle(Color.white.opacity(0.8))
+    }
+}
+
+struct ConnectionBadgeRow: View {
+    let items: [ConnectionBadgeItem]
+    @EnvironmentObject private var mindNavigator: MindNavigationModel
+    
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                Button {
+                    mindNavigator.open(to: destination(for: item))
+                } label: {
+                    ConnectionBadgeLabel(item: item)
+                }
+                .buttonStyle(.plain)
+                if index < items.count - 1 {
+                    Rectangle()
+                        .fill(item.dividerColor)
+                        .frame(width: 1, height: 14)
+                        .padding(.horizontal, 4)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+    }
+    
+    private func destination(for item: ConnectionBadgeItem) -> MindDestination {
+        switch item.kind {
+        case .goal:
+            return .goals(targetId: item.id)
+        case .pillar:
+            return .pillars(targetId: item.id)
+        }
+    }
+    
+    private struct ConnectionBadgeLabel: View {
+        let item: ConnectionBadgeItem
+        
+        var body: some View {
+            HStack(spacing: 4) {
+                Image(systemName: item.icon)
+                    .font(.caption2)
+                Text(item.shortTitle)
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(item.tint.opacity(0.18), in: Capsule())
+            .foregroundStyle(item.tint)
+            .help(item.tooltip)
+        }
+    }
+}
+
+struct ConnectionBadgeItem {
+    enum Kind {
+        case goal
+        case pillar
+    }
+    
+    let kind: Kind
+    let id: UUID?
+    let fullTitle: String
+    let reason: String?
+    let icon: String
+    let tint: Color
+    
+    var shortTitle: String {
+        fullTitle.badgeShortTitle()
+    }
+    
+    var tooltip: String {
+        let trimmedTitle = fullTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedReason = reason?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmedReason.isEmpty else { return trimmedTitle }
+        return "\(trimmedTitle)\n\(trimmedReason)"
+    }
+    
+    var dividerColor: Color {
+        tint.opacity(0.35)
     }
 }
 

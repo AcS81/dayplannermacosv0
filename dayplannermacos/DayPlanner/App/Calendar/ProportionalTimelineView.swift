@@ -373,8 +373,9 @@ struct TimelineCanvas: View {
             }
         }
     }
-    
-    struct PreciseEventCard: View {
+}
+
+struct PreciseEventCard: View {
     let block: TimeBlock
     let selectedDate: Date
     let dayStartHour: Int
@@ -460,16 +461,8 @@ struct TimelineCanvas: View {
                             .foregroundStyle(.tertiary)
                     }
 
-                    if linkedGoal != nil || linkedPillar != nil {
-                        HStack(spacing: 6) {
-                            if let goal = linkedGoal {
-                                connectionBadge(title: goal.title, color: .blue, systemImage: "target")
-                            }
-                            if let pillar = linkedPillar {
-                                connectionBadge(title: pillar.name, color: .purple, systemImage: "building.columns")
-                            }
-                            Spacer()
-                        }
+                    if block.suggestionId != nil, !connectionBadgeItems.isEmpty {
+                        ConnectionBadgeRow(items: connectionBadgeItems)
                     }
                 }
                 
@@ -631,18 +624,44 @@ struct TimelineCanvas: View {
         dataManager.appState.pillars.first { $0.id == block.relatedPillarId }
     }
     
-    private func connectionBadge(title: String, color: Color, systemImage: String) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: systemImage)
-                .font(.caption2)
-            Text(title)
-                .font(.caption2)
-                .fontWeight(.semibold)
+    private var resolvedGoalTitle: String? {
+        if let goal = linkedGoal { return goal.title }
+        return block.relatedGoalTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    
+    private var resolvedPillarTitle: String? {
+        if let pillar = linkedPillar { return pillar.name }
+        return block.relatedPillarTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    
+    private var connectionBadgeItems: [ConnectionBadgeItem] {
+        guard block.suggestionId != nil else { return [] }
+        var items: [ConnectionBadgeItem] = []
+        if let goalTitle = resolvedGoalTitle, !goalTitle.isEmpty {
+            items.append(
+                ConnectionBadgeItem(
+                    kind: .goal,
+                    id: block.relatedGoalId,
+                    fullTitle: goalTitle,
+                    reason: block.suggestionReason,
+                    icon: "target",
+                    tint: .blue
+                )
+            )
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(color.opacity(0.12), in: Capsule())
-        .foregroundStyle(color)
+        if let pillarTitle = resolvedPillarTitle, !pillarTitle.isEmpty {
+            items.append(
+                ConnectionBadgeItem(
+                    kind: .pillar,
+                    id: block.relatedPillarId,
+                    fullTitle: pillarTitle,
+                    reason: block.suggestionReason,
+                    icon: "building.columns",
+                    tint: .purple
+                )
+            )
+        }
+        return items
     }
     
     private func calculateNewTime(from translation: CGSize) -> Date {
