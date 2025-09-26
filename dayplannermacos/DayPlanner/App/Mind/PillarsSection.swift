@@ -1,6 +1,528 @@
-// MARK: - Comprehensive Pillar Creator
-
 import SwiftUI
+
+// MARK: - Mind Pillars Surface
+
+struct MindPillarsSection: View {
+    @EnvironmentObject private var dataManager: AppDataManager
+    @Environment(\.highlightedPillarId) private var highlightedPillarId
+
+    @State private var showingPillarCreator = false
+    @State private var selectedPillar: Pillar?
+    @State private var editingPillar: Pillar?
+
+    private var pillars: [Pillar] {
+        let emphasized = dataManager.appState.emphasizedPillarIds
+        return dataManager.appState.pillars.sorted { lhs, rhs in
+            let lhsEmphasis = emphasized.contains(lhs.id)
+            let rhsEmphasis = emphasized.contains(rhs.id)
+            if lhsEmphasis != rhsEmphasis {
+                return lhsEmphasis && !rhsEmphasis
+            }
+            return lhs.createdAt > rhs.createdAt
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(
+                title: "Pillars",
+                subtitle: "Principles that bias the engine, never auto-book",
+                systemImage: "building.columns.circle",
+                gradient: LinearGradient(colors: [.purple, .pink], startPoint: .leading, endPoint: .trailing),
+                onAction: { showingPillarCreator = true }
+            )
+
+            if pillars.isEmpty {
+                MindEmptyPillarsCard {
+                    showingPillarCreator = true
+                }
+            } else {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 2), spacing: 12) {
+                    ForEach(pillars) { pillar in
+                        let isEmphasized = dataManager.isPillarEmphasized(pillar.id)
+                        MindPillarCard(
+                            pillar: pillar,
+                            isEmphasized: isEmphasized,
+                            isHighlighted: highlightedPillarId == pillar.id,
+                            onTap: {
+                                selectedPillar = dataManager.appState.pillars.first(where: { $0.id == pillar.id }) ?? pillar
+                            },
+                            onToggleEmphasis: {
+                                dataManager.togglePillarEmphasis(pillar.id)
+                            },
+                            onEdit: {
+                                editingPillar = dataManager.appState.pillars.first(where: { $0.id == pillar.id }) ?? pillar
+                            },
+                            onDelete: {
+                                dataManager.removePillar(pillar.id)
+                            }
+                        )
+                    }
+                }
+                .transition(.opacity)
+            }
+        }
+        .sheet(isPresented: $showingPillarCreator) {
+            ComprehensivePillarCreatorSheet { newPillar in
+                dataManager.addPillar(newPillar)
+                selectedPillar = dataManager.appState.pillars.first(where: { $0.id == newPillar.id })
+            }
+        }
+        .sheet(item: $selectedPillar) { pillar in
+            PillarDetailSheet(
+                pillar: pillar,
+                isEmphasized: dataManager.isPillarEmphasized(pillar.id),
+                onToggleEmphasis: {
+                    dataManager.togglePillarEmphasis(pillar.id)
+                },
+                onEdit: {
+                    editingPillar = dataManager.appState.pillars.first(where: { $0.id == pillar.id }) ?? pillar
+                },
+                onDelete: {
+                    dataManager.removePillar(pillar.id)
+                    selectedPillar = nil
+                }
+            )
+        }
+        .sheet(item: $editingPillar) { pillar in
+            ComprehensivePillarEditorSheet(pillar: pillar) { updatedPillar in
+                dataManager.updatePillar(updatedPillar)
+                if let refreshed = dataManager.appState.pillars.first(where: { $0.id == updatedPillar.id }) {
+                    selectedPillar = refreshed
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Pillar Cards & Detail
+
+struct MindPillarCard: View {
+    let pillar: Pillar
+    let isEmphasized: Bool
+    let isHighlighted: Bool
+    let onTap: () -> Void
+    let onToggleEmphasis: () -> Void
+    let onEdit: () -> Void
+    let onDelete: () -> Void
+
+    private var borderColor: Color {
+        pillar.color.color.opacity(isHighlighted ? 0.9 : 0.35)
+    }
+
+    var body: some View {
+        Button(action: onTap) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 10) {
+                    Text(pillar.emoji)
+                        .font(.title2)
+                        .frame(width: 32, height: 32)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(pillar.name)
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                            .lineLimit(2)
+
+                        Text(pillar.description)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+
+                    Spacer()
+
+                    if isEmphasized {
+                        Label("Boosted", systemImage: "sparkles")
+                            .font(.caption2)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.purple.opacity(0.15), in: Capsule())
+                            .foregroundStyle(.purple)
+                    }
+                }
+
+                if let wisdom = pillar.wisdomText?.nilIfEmpty {
+                    Text("“\(wisdom)”")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .italic()
+                        .lineLimit(2)
+                }
+
+                PillarSummaryRow(icon: "diamond.fill", title: "Values", items: pillar.values, limit: 3)
+                PillarSummaryRow(icon: "figure.run", title: "Habits", items: pillar.habits, limit: 2)
+                PillarSummaryRow(icon: "shield.lefthalf.filled", title: "Constraints", items: pillar.constraints, limit: 2)
+
+                HStack {
+                    Label(pillar.frequencyDescription, systemImage: "metronome")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    if !pillar.quietHours.isEmpty {
+                        Label("\(pillar.quietHours.count) quiet \(pillar.quietHours.count == 1 ? "window" : "windows")", systemImage: "moon.zzz")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(.secondarySystemBackground).opacity(0.6))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(borderColor, lineWidth: isHighlighted ? 2.5 : 1)
+        )
+        .shadow(color: borderColor.opacity(isHighlighted ? 0.45 : 0.0), radius: isHighlighted ? 12 : 0, x: 0, y: 6)
+        .contextMenu {
+            Button {
+                onToggleEmphasis()
+            } label: {
+                Label(isEmphasized ? "Drop emphasis" : "Emphasize pillar", systemImage: isEmphasized ? "star.slash" : "star.fill")
+            }
+
+            Button(action: onEdit) {
+                Label("Edit pillar", systemImage: "square.and.pencil")
+            }
+
+            Button(role: .destructive, action: onDelete) {
+                Label("Delete pillar", systemImage: "trash")
+            }
+        }
+    }
+}
+
+struct MindEmptyPillarsCard: View {
+    let onCreate: () -> Void
+
+    var body: some View {
+        Button(action: onCreate) {
+            VStack(spacing: 12) {
+                Text("🧭")
+                    .font(.largeTitle)
+                    .opacity(0.7)
+
+                Text("Define your first pillar")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+
+                Text("Pillars capture the principles you want the planner to defend. They bias ghost suggestions — nothing auto-books without you.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+
+                Text("Create pillar")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(.blue.opacity(0.15), in: Capsule())
+                    .foregroundStyle(.blue)
+            }
+            .padding(.vertical, 24)
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(.secondarySystemBackground).opacity(0.5))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.blue.opacity(0.25), style: StrokeStyle(lineWidth: 1.5, dash: [6, 6]))
+        )
+    }
+}
+
+struct PillarSummaryRow: View {
+    let icon: String
+    let title: String
+    let items: [String]
+    let limit: Int
+
+    private var displayItems: [String] {
+        Array(items.prefix(limit))
+    }
+
+    var body: some View {
+        Group {
+            if !displayItems.isEmpty {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: icon)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 14)
+
+                    Text(displayItems.joined(separator: " • "))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                }
+            }
+        }
+    }
+}
+
+struct PillarDetailSheet: View {
+    let pillar: Pillar
+    private let onToggleEmphasis: () -> Void
+    private let onEdit: () -> Void
+    private let onDelete: () -> Void
+
+    @State private var isEmphasized: Bool
+    @State private var showingDeleteConfirmation = false
+
+    @EnvironmentObject private var dataManager: AppDataManager
+    @Environment(\.dismiss) private var dismiss
+
+    init(
+        pillar: Pillar,
+        isEmphasized: Bool,
+        onToggleEmphasis: @escaping () -> Void,
+        onEdit: @escaping () -> Void,
+        onDelete: @escaping () -> Void
+    ) {
+        self.pillar = pillar
+        self.onToggleEmphasis = onToggleEmphasis
+        self.onEdit = onEdit
+        self.onDelete = onDelete
+        self._isEmphasized = State(initialValue: isEmphasized)
+    }
+
+    private var relatedGoal: Goal? {
+        dataManager.appState.goals.first(where: { $0.id == pillar.relatedGoalId })
+    }
+
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    header
+                    emphasisControls
+                    if let wisdom = pillar.wisdomText?.nilIfEmpty { wisdomSection(wisdom) }
+                    detailSection(icon: "diamond.fill", title: "Values", items: pillar.values)
+                    detailSection(icon: "figure.run", title: "Habits", items: pillar.habits)
+                    detailSection(icon: "shield.lefthalf.filled", title: "Constraints", items: pillar.constraints)
+                    quietHoursSection
+                    if let goal = relatedGoal { relatedGoalSection(goal) }
+                    guidanceSection
+                    footerMeta
+                    deleteButton
+                }
+                .padding(24)
+            }
+            .background(.ultraThinMaterial)
+            .navigationTitle("Pillar detail")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Edit") {
+                        dismiss()
+                        onEdit()
+                    }
+                }
+            }
+        }
+        .frame(minWidth: 460, minHeight: 540)
+        .confirmationDialog("Delete this pillar?", isPresented: $showingDeleteConfirmation, titleVisibility: .visible) {
+            Button("Delete pillar", role: .destructive) {
+                onDelete()
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the pillar and its influence on future suggestions.")
+        }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 12) {
+                Text(pillar.emoji)
+                    .font(.system(size: 44))
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(pillar.name)
+                        .font(.title3)
+                        .fontWeight(.semibold)
+
+                    Text(pillar.description)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+            }
+
+            HStack(spacing: 10) {
+                Label(pillar.frequencyDescription, systemImage: "metronome")
+                    .font(.caption)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(.blue.opacity(0.12), in: Capsule())
+                if !pillar.quietHours.isEmpty {
+                    Label("Quiet hours", systemImage: "moon.zzz")
+                        .font(.caption)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(.indigo.opacity(0.12), in: Capsule())
+                }
+                if isEmphasized {
+                    Label("Boosted", systemImage: "sparkles")
+                        .font(.caption)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(.purple.opacity(0.15), in: Capsule())
+                }
+            }
+        }
+    }
+
+    private var emphasisControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Influence scheduling")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+
+            Text("Emphasized pillars appear more often in ghost suggestions, but nothing auto-books without you.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Button {
+                onToggleEmphasis()
+                isEmphasized.toggle()
+            } label: {
+                Label(isEmphasized ? "Drop emphasis" : "Emphasize pillar", systemImage: isEmphasized ? "star.slash" : "star.fill")
+                    .font(.subheadline)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(isEmphasized ? .purple : .blue)
+        }
+    }
+
+    private func wisdomSection(_ wisdom: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Principle", systemImage: "lightbulb")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+            Text(wisdom)
+                .font(.body)
+        }
+    }
+
+    private func detailSection(icon: String, title: String, items: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(title, systemImage: icon)
+                .font(.subheadline)
+                .fontWeight(.semibold)
+            if items.isEmpty {
+                Text("No entries yet")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                PillarTagList(items: items)
+            }
+        }
+    }
+
+    private var quietHoursSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Quiet hours", systemImage: "moon.zzz")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+            if pillar.quietHours.isEmpty {
+                Text("No quiet hours defined")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                PillarTagList(items: pillar.quietHours.map { $0.description })
+            }
+        }
+    }
+
+    private func relatedGoalSection(_ goal: Goal) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Supports goal", systemImage: "target")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+            Text("\(goal.emoji) \(goal.title)")
+                .font(.body)
+            Text(goal.description)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var guidanceSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Guidance to AI", systemImage: "brain.head.profile")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+            Text(pillar.aiGuidanceText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var footerMeta: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Created \(pillar.createdAt.formatted(date: .abbreviated, time: .omitted))")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            if let goal = relatedGoal {
+                Text("Biasing toward \(goal.title) when planning")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var deleteButton: some View {
+        Button(role: .destructive) {
+            showingDeleteConfirmation = true
+        } label: {
+            Label("Delete pillar", systemImage: "trash")
+                .font(.subheadline)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+    }
+}
+
+struct PillarTagList: View {
+    let items: [String]
+
+    private let columns = [
+        GridItem(.flexible(minimum: 60), spacing: 6),
+        GridItem(.flexible(minimum: 60), spacing: 6)
+    ]
+
+    var body: some View {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 6) {
+            ForEach(items, id: \.self) { item in
+                Text(item)
+                    .font(.caption)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(.thinMaterial, in: Capsule())
+            }
+        }
+    }
+}
+
+// MARK: - Comprehensive Pillar Creator
 
 struct ComprehensivePillarEditorSheet: View {
     let pillar: Pillar

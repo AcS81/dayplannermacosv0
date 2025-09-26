@@ -304,7 +304,8 @@ private extension EnhancedDayView {
                 into: &gaps,
                 isToday: isToday,
                 now: now,
-                minimumDuration: minimumDuration
+                minimumDuration: minimumDuration,
+                placed: placed
             ) else {
                 continue
             }
@@ -322,7 +323,8 @@ private extension EnhancedDayView {
         into gaps: inout [TimeGap],
         isToday: Bool,
         now: Date,
-        minimumDuration: TimeInterval
+        minimumDuration: TimeInterval,
+        placed: [Suggestion]
     ) -> (start: Date, duration: TimeInterval)? {
         var index = 0
         while index < gaps.count {
@@ -360,7 +362,24 @@ private extension EnhancedDayView {
                 continue
             }
 
-            let consumptionEnd = startTime.addingTimeInterval(finalDuration + buffer)
+            let endTime = startTime.addingTimeInterval(finalDuration)
+
+            if let conflict = placed.first(where: { existing in
+                let existingEnd = existing.suggestedTime.addingTimeInterval(existing.duration)
+                return startTime < existingEnd && endTime > existing.suggestedTime
+            }) {
+                let conflictEnd = conflict.suggestedTime.addingTimeInterval(conflict.duration)
+                let snapped = snapUpToNearestFiveMinutes(conflictEnd)
+                if snapped >= gap.end - minimumDuration {
+                    gaps.remove(at: index)
+                } else {
+                    gap.start = max(snapped, adjustedStart)
+                    gaps[index] = gap
+                }
+                continue
+            }
+
+            let consumptionEnd = endTime.addingTimeInterval(buffer)
             if consumptionEnd < gap.end - minimumDuration {
                 gap.start = consumptionEnd
                 gaps[index] = gap

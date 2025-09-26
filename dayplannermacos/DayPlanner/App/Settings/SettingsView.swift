@@ -271,6 +271,10 @@ struct AITrustSettingsView: View {
                         aiService.configure(with: dataManager.appState.preferences)
                     }
 
+                    Text("Choose whether to keep everything on-device or route to the OpenAI API. Changes apply instantly to new ghosts and Mind chat requests.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
                     if selectedProvider == .openAI {
                         VStack(alignment: .leading, spacing: 12) {
                             HStack {
