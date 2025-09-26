@@ -73,7 +73,8 @@ struct EnhancedDayView: View {
                     ghostSuggestions: ghostSuggestions,
                     dayStartHour: dayStartHour,
                     selectedGhosts: $selectedGhostIDs,
-                    onGhostToggle: toggleGhostSelection
+                    onGhostToggle: toggleGhostSelection,
+                    onGhostReject: rejectGhost
                 )
                 .padding(.trailing, 2)
                 .padding(.bottom, ghostAcceptanceInset)
@@ -203,9 +204,35 @@ struct EnhancedDayView: View {
         } else {
             selectedGhostIDs.insert(suggestion.id)
         }
-        
+
         // Push state changes to calendar panel via direct callback
         onGhostAcceptanceChange?(acceptanceInfo)
+    }
+
+    private func rejectGhost(_ suggestion: Suggestion) {
+        dataManager.rejectSuggestion(suggestion, reason: "timeline dismiss")
+        selectedGhostIDs.remove(suggestion.id)
+
+        let removal = {
+            ghostSuggestions.removeAll { $0.id == suggestion.id }
+        }
+
+        if reduceMotion {
+            removal()
+        } else {
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.9)) {
+                removal()
+            }
+        }
+
+        onGhostAcceptanceChange?(acceptanceInfo)
+
+        guard showingRecommendations else { return }
+
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            await refreshGhosts(force: true, reason: .rejectedSuggestion)
+        }
     }
 }
 
@@ -292,16 +319,43 @@ private extension EnhancedDayView {
         let isToday = Calendar.current.isDate(date, inSameDayAs: Date())
         let now = Date()
         let minimumDuration: TimeInterval = 600
+        let recentRejections = dataManager.recentSuggestionRejections(for: date)
         var placed: [Suggestion] = []
+        var queue = suggestions
+        var gapIndex = 0
 
-        for var suggestion in suggestions {
+        while gapIndex < gaps.count && !queue.isEmpty {
+            var suggestion = queue.removeFirst()
+            if let placement = placeSuggestion(
+                suggestion,
+                into: &gaps,
+                isToday: isToday,
+                now: now,
+                minimumDuration: minimumDuration,
+                placed: placed,
+                rejections: recentRejections,
+                preferredGapIndex: gapIndex
+            ) {
+                suggestion.suggestedTime = placement.start
+                suggestion.duration = placement.duration
+                placed.append(suggestion)
+            } else {
+                queue.append(suggestion)
+            }
+            gapIndex += 1
+        }
+
+        while !queue.isEmpty {
+            var suggestion = queue.removeFirst()
             guard let placement = placeSuggestion(
                 suggestion,
                 into: &gaps,
                 isToday: isToday,
                 now: now,
                 minimumDuration: minimumDuration,
-                placed: placed
+                placed: placed,
+                rejections: recentRejections,
+                preferredGapIndex: nil
             ) else {
                 continue
             }
@@ -320,16 +374,32 @@ private extension EnhancedDayView {
         isToday: Bool,
         now: Date,
         minimumDuration: TimeInterval,
-        placed: [Suggestion]
+        placed: [Suggestion],
+        rejections: [SuggestionRejectionMemory],
+        preferredGapIndex: Int?
     ) -> (start: Date, duration: TimeInterval)? {
-        var index = 0
-        while index < gaps.count {
-            var gap = gaps[index]
+        var indicesToCheck: [Int] = []
+        if let preferredGapIndex,
+           preferredGapIndex < gaps.count {
+            indicesToCheck.append(preferredGapIndex)
+        }
+        indicesToCheck.append(contentsOf: gaps.indices.filter { $0 != preferredGapIndex })
+
+        var offset = 0
+        while offset < indicesToCheck.count {
+            let rawIndex = indicesToCheck[offset]
+            guard rawIndex < gaps.count else {
+                offset += 1
+                continue
+            }
+
+            var gap = gaps[rawIndex]
             let adjustedStart = isToday ? max(gap.start, now) : gap.start
             let gapDuration = gap.end.timeIntervalSince(adjustedStart)
 
             if gapDuration < minimumDuration {
-                gaps.remove(at: index)
+                gaps.remove(at: rawIndex)
+                adjustCandidateIndices(&indicesToCheck, removedIndex: rawIndex, preferred: preferredGapIndex)
                 continue
             }
 
@@ -338,14 +408,29 @@ private extension EnhancedDayView {
                 startTime = adjustedStart
             }
 
+            guard let resolvedStart = resolveStartTime(
+                initialStart: startTime,
+                gap: gap,
+                rejections: rejections,
+                minimumDuration: minimumDuration
+            ) else {
+                gaps.remove(at: rawIndex)
+                adjustCandidateIndices(&indicesToCheck, removedIndex: rawIndex, preferred: preferredGapIndex)
+                continue
+            }
+
+            startTime = resolvedStart
+
             if startTime >= gap.end {
-                gaps.remove(at: index)
+                gaps.remove(at: rawIndex)
+                adjustCandidateIndices(&indicesToCheck, removedIndex: rawIndex, preferred: preferredGapIndex)
                 continue
             }
 
             let available = gap.end.timeIntervalSince(startTime)
             if available < minimumDuration {
-                gaps.remove(at: index)
+                gaps.remove(at: rawIndex)
+                adjustCandidateIndices(&indicesToCheck, removedIndex: rawIndex, preferred: preferredGapIndex)
                 continue
             }
 
@@ -354,7 +439,8 @@ private extension EnhancedDayView {
             let finalDuration = min(desiredDuration, available - buffer)
 
             if finalDuration < minimumDuration {
-                gaps.remove(at: index)
+                gaps.remove(at: rawIndex)
+                adjustCandidateIndices(&indicesToCheck, removedIndex: rawIndex, preferred: preferredGapIndex)
                 continue
             }
 
@@ -367,10 +453,10 @@ private extension EnhancedDayView {
                 let conflictEnd = conflict.suggestedTime.addingTimeInterval(conflict.duration)
                 let snapped = snapUpToNearestFiveMinutes(conflictEnd)
                 if snapped >= gap.end - minimumDuration {
-                    gaps.remove(at: index)
+                    gaps.remove(at: rawIndex)
                 } else {
                     gap.start = max(snapped, adjustedStart)
-                    gaps[index] = gap
+                    gaps[rawIndex] = gap
                 }
                 continue
             }
@@ -378,15 +464,68 @@ private extension EnhancedDayView {
             let consumptionEnd = endTime.addingTimeInterval(buffer)
             if consumptionEnd < gap.end - minimumDuration {
                 gap.start = consumptionEnd
-                gaps[index] = gap
+                gaps[rawIndex] = gap
             } else {
-                gaps.remove(at: index)
+                gaps.remove(at: rawIndex)
+                adjustCandidateIndices(&indicesToCheck, removedIndex: rawIndex, preferred: preferredGapIndex)
             }
 
             return (startTime, finalDuration)
         }
 
         return nil
+    }
+
+    private func adjustCandidateIndices(_ indices: inout [Int], removedIndex: Int, preferred: Int?) {
+        indices = indices.compactMap { index in
+            if index == removedIndex { return nil }
+            return index > removedIndex ? index - 1 : index
+        }
+
+        if let preferred,
+           preferred > removedIndex {
+            let adjustedPreferred = preferred - 1
+            if !indices.contains(adjustedPreferred) {
+                indices.insert(adjustedPreferred, at: 0)
+            }
+        }
+    }
+
+    private func resolveStartTime(
+        initialStart: Date,
+        gap: TimeGap,
+        rejections: [SuggestionRejectionMemory],
+        minimumDuration: TimeInterval
+    ) -> Date? {
+        var candidate = initialStart
+        let increment: TimeInterval = 15 * 60
+        let cutoff = gap.end.addingTimeInterval(-minimumDuration)
+
+        while candidate <= cutoff {
+            let slot = rejectionSlotIdentifier(for: candidate)
+            let recentlyRejected = rejections.contains { memory in
+                memory.slotIdentifier == slot && Date().timeIntervalSince(memory.rejectedAt) < 21_600
+            }
+            if !recentlyRejected {
+                return candidate
+            }
+            candidate = candidate.addingTimeInterval(increment)
+        }
+
+        return nil
+    }
+
+    private func rejectionSlotIdentifier(for date: Date) -> String {
+        let calendar = Calendar.current
+        var components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+        let minuteBucket = ((components.minute ?? 0) / 30) * 30
+        components.minute = minuteBucket
+        components.second = 0
+        let year = components.year ?? 0
+        let month = components.month ?? 0
+        let day = components.day ?? 0
+        let hour = components.hour ?? 0
+        return String(format: "%04d-%02d-%02d|%02d:%02d", year, month, day, hour, minuteBucket)
     }
     
     func computeGaps(for date: Date) -> [TimeGap] {

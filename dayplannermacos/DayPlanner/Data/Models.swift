@@ -603,6 +603,27 @@ struct Suggestion: Identifiable, Codable {
     }
 }
 
+/// Lightweight memory for recently rejected suggestions so the AI can be more considerate
+struct SuggestionRejectionMemory: Identifiable, Codable, Hashable {
+    var id: UUID = UUID()
+    var title: String
+    var suggestedTime: Date
+    var rejectedAt: Date
+    var reason: String?
+
+    /// Stored slot identifier so we can avoid proposing the exact same window repeatedly
+    var slotIdentifier: String
+
+    init(id: UUID = UUID(), title: String, suggestedTime: Date, rejectedAt: Date = Date(), reason: String? = nil, slotIdentifier: String) {
+        self.id = id
+        self.title = title
+        self.suggestedTime = suggestedTime
+        self.rejectedAt = rejectedAt
+        self.reason = reason
+        self.slotIdentifier = slotIdentifier
+    }
+}
+
 /// Context for AI decision making
 struct DayContext: Codable {
     let date: Date
@@ -671,7 +692,8 @@ struct AppState: Codable {
     var todoItems: [TodoItem] = []
     var moodEntries: [MoodEntry] = []
     var onboarding: OnboardingState = OnboardingState()
-    
+    var suggestionRejections: [SuggestionRejectionMemory] = []
+
     // Scheduling emphasis and feedback signals
     var pinnedGoalIds: Set<UUID> = []
     var emphasizedPillarIds: Set<UUID> = []
@@ -730,7 +752,11 @@ struct Record: Identifiable, Codable {
     var energy: EnergyType
     var emoji: String
     var confirmedAt: Date = Date()
-    
+    var confirmationNote: String?
+    var weatherSnapshot: String?
+    var moodSnapshot: GlassMood?
+    var observationLog: [String] = []
+
     var duration: TimeInterval {
         endTime.timeIntervalSince(startTime)
     }

@@ -213,6 +213,12 @@ struct CalendarChatBar: View {
     }
     
     private func sendPlanningMessage(_ message: String) {
+        if let localAnswer = dataManager.localCalendarAnswer(for: message, on: dataManager.appState.currentDay.date) {
+            lastAIResponse = localAnswer
+            refreshPrompt()
+            return
+        }
+
         isSending = true
         lastAIResponse = nil // Clear previous response
         Task {

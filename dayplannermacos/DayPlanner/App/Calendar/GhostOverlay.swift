@@ -8,7 +8,8 @@ struct GhostOverlay: View {
     let suggestions: [Suggestion]
     @Binding var selectedGhosts: Set<UUID>
     let onToggle: (Suggestion) -> Void
-    
+    let onReject: (Suggestion) -> Void
+
     var body: some View {
         ForEach(suggestions) { suggestion in
             GhostEventCard(
@@ -17,7 +18,8 @@ struct GhostOverlay: View {
                 dayStartHour: dayStartHour,
                 minuteHeight: minuteHeight,
                 isSelected: selectedGhosts.contains(suggestion.id),
-                onToggle: { onToggle(suggestion) }
+                onToggle: { onToggle(suggestion) },
+                onReject: { onReject(suggestion) }
             )
             .transition(reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 0.98)))
         }
@@ -36,11 +38,12 @@ private struct GhostEventCard: View {
     let minuteHeight: CGFloat
     let isSelected: Bool
     let onToggle: () -> Void
-    
+    let onReject: () -> Void
+
     @EnvironmentObject private var dataManager: AppDataManager
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovering = false
-    
+
     private var calendar: Calendar { Calendar.current }
     
     private var startOfTimeline: Date {
@@ -146,7 +149,8 @@ private struct GhostEventCard: View {
     }
 
     var body: some View {
-        Button(action: onToggle) {
+        HStack(alignment: .top, spacing: 10) {
+            // Selection indicator and content
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: checkboxSymbol)
                     .font(.title3)
@@ -165,8 +169,8 @@ private struct GhostEventCard: View {
                         VStack(alignment: .trailing, spacing: 2) {
                             Text(suggestion.suggestedTime.timeString)
                                 .font(.caption2)
-                                .foregroundStyle(Color.white.opacity(0.7))
-                            
+                            .foregroundStyle(Color.white.opacity(0.7))
+
                             // Add visual hint for interaction
                             if !isSelected {
                                 Text("Tap to select")
@@ -176,7 +180,7 @@ private struct GhostEventCard: View {
                             }
                         }
                     }
-                    
+
                     HStack(spacing: 8) {
                         TagView(
                             text: "\(Int(suggestion.duration / 60))m",
@@ -206,26 +210,38 @@ private struct GhostEventCard: View {
                     }
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(backgroundColor)
-                    .blur(radius: 0.2)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .strokeBorder(style: StrokeStyle(lineWidth: 1.2, dash: [6, 6], dashPhase: 6))
-                            .foregroundStyle(borderColor)
-                    )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
-            )
-            .shadow(color: Color.black.opacity(0.18), radius: 6, x: 0, y: 4)
+            Spacer(minLength: 0)
+
+            Button(action: onReject) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(Color.white.opacity(0.8))
+                    .symbolRenderingMode(.hierarchical)
+                    .padding(4)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("Dismiss suggestion"))
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(backgroundColor)
+                .blur(radius: 0.2)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(style: StrokeStyle(lineWidth: 1.2, dash: [6, 6], dashPhase: 6))
+                        .foregroundStyle(borderColor)
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+        )
+        .shadow(color: Color.black.opacity(0.18), radius: 6, x: 0, y: 4)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onToggle)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(accessibilitySummary))

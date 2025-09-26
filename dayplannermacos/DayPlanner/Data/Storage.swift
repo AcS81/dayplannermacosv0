@@ -693,7 +693,25 @@ class AppDataManager: ObservableObject {
         block.confirmationState = .confirmed
         block.glassState = .solid
         appState.currentDay.blocks[index] = block
-        
+
+        let confirmationDate = Date()
+        let weatherSnapshot = weatherService.getWeatherContext()
+        let moodSnapshot = appState.currentDay.mood
+
+        var observationLog: [String] = []
+        let timeFormatter = DateFormatter()
+        timeFormatter.timeStyle = .short
+        observationLog.append("Confirmed at \(timeFormatter.string(from: confirmationDate))")
+        if let weatherSnapshot, !weatherSnapshot.isEmpty {
+            observationLog.append("Weather noted: \(weatherSnapshot)")
+        }
+        if let goalTitle = block.relatedGoalTitle {
+            observationLog.append("Linked goal: \(goalTitle)")
+        }
+        if let pillarTitle = block.relatedPillarTitle {
+            observationLog.append("Guided by pillar: \(pillarTitle)")
+        }
+
         let record = Record(
             blockId: block.id,
             title: block.title,
@@ -702,7 +720,11 @@ class AppDataManager: ObservableObject {
             notes: block.notes,
             energy: block.energy,
             emoji: block.emoji,
-            confirmedAt: Date()
+            confirmedAt: confirmationDate,
+            confirmationNote: trimmedNotes,
+            weatherSnapshot: weatherSnapshot,
+            moodSnapshot: moodSnapshot,
+            observationLog: observationLog
         )
         appState.records.append(record)
         appState.todoItems.removeAll { $0.followUp?.blockId == block.id }
@@ -1243,11 +1265,81 @@ class AppDataManager: ObservableObject {
             pillarGuidance: principleGuidance
         )
     }
-    
+
+    func localCalendarAnswer(for message: String, on date: Date) -> String? {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let normalized = trimmed.lowercased()
+        let keywords = [
+            "what have i done today",
+            "what did i do today",
+            "what did i accomplish",
+            "what have i accomplished",
+            "what have i already done",
+            "what's done today",
+            "what have i finished"
+        ]
+
+        guard keywords.contains(where: { normalized.contains($0) }) else { return nil }
+
+        let todaysRecords = appState.records
+            .filter { Calendar.current.isDate($0.startTime, inSameDayAs: date) }
+            .sorted { $0.startTime < $1.startTime }
+
+        guard !todaysRecords.isEmpty else {
+            return "You haven't confirmed any events yet today. As you lock things in with 🔒 I'll keep track so you can review them anytime."
+        }
+
+        let timeFormatter = DateFormatter()
+        timeFormatter.timeStyle = .short
+
+        var entries: [String] = []
+
+        for record in todaysRecords {
+            let start = timeFormatter.string(from: record.startTime)
+            let end = timeFormatter.string(from: record.endTime)
+            var detailLines: [String] = []
+
+            if let confirmationNote = record.confirmationNote, !confirmationNote.isEmpty {
+                detailLines.append("Notes: \(confirmationNote)")
+            } else if let note = record.notes, !note.isEmpty {
+                detailLines.append("Notes: \(note)")
+            }
+
+            if let weather = record.weatherSnapshot, !weather.isEmpty {
+                detailLines.append("Weather: \(weather)")
+            }
+
+            if let mood = record.moodSnapshot {
+                detailLines.append("Mood: \(mood.emoji) \(mood.description)")
+            }
+
+            for observation in record.observationLog where !observation.isEmpty {
+                if observation.lowercased().hasPrefix("weather"),
+                   detailLines.contains(where: { $0.lowercased().hasPrefix("weather") }) {
+                    continue
+                }
+                if !detailLines.contains(observation) {
+                    detailLines.append(observation)
+                }
+            }
+
+            let header = "🔒 \(start) – \(end) · \(record.title)"
+            if detailLines.isEmpty {
+                entries.append(header)
+            } else {
+                entries.append("\(header)\n\(detailLines.map { "    • \($0)" }.joined(separator: "\n"))")
+            }
+        }
+
+        return "Here's what you've already locked in today:\n\n\(entries.joined(separator: "\n\n"))"
+    }
+
     /// Get recently completed events for AI context
     private func getRecentlyCompletedEvents(withinDays: Int) -> [TimeBlock] {
         let cutoffDate = Calendar.current.date(byAdding: .day, value: -withinDays, to: Date()) ?? Date()
-        
+
         return appState.historicalDays
             .filter { $0.date >= cutoffDate }
             .flatMap { $0.blocks }
@@ -1985,6 +2077,25 @@ class AppDataManager: ObservableObject {
         }
     }
 
+    private func pruneSuggestionRejections(olderThan days: Int = 7) {
+        guard !appState.suggestionRejections.isEmpty else { return }
+        let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
+        appState.suggestionRejections = appState.suggestionRejections.filter { $0.rejectedAt >= cutoff }
+    }
+
+    private func rejectionSlotIdentifier(for date: Date) -> String {
+        let calendar = Calendar.current
+        var components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+        let minuteBucket = ((components.minute ?? 0) / 30) * 30
+        components.minute = minuteBucket
+        components.second = 0
+        let year = components.year ?? 0
+        let month = components.month ?? 0
+        let day = components.day ?? 0
+        let hour = components.hour ?? 0
+        return String(format: "%04d-%02d-%02d|%02d:%02d", year, month, day, hour, minuteBucket)
+    }
+
     func recordFeedback(
         target: FeedbackTargetType,
         targetId: UUID,
@@ -2313,9 +2424,10 @@ class AppDataManager: ObservableObject {
     
     /// Enhanced rejectSuggestion with pattern learning
     func rejectSuggestion(_ suggestion: Suggestion, reason: String? = nil) {
+        recordSuggestionRejectionMemory(suggestion, reason: reason)
         // Record rejection for learning
         recordSuggestionFeedback(suggestion, accepted: false, reason: reason)
-        
+
         // Track rejection patterns for learning
         let rejectionPattern = "rejected:\(suggestion.title.lowercased())"
         if !appState.userPatterns.contains(rejectionPattern) {
@@ -2323,6 +2435,24 @@ class AppDataManager: ObservableObject {
         }
         save()
         requestMicroUpdate(.rejectedSuggestion)
+    }
+
+    func recordSuggestionRejectionMemory(_ suggestion: Suggestion, reason: String? = nil) {
+        let memory = SuggestionRejectionMemory(
+            title: suggestion.title,
+            suggestedTime: suggestion.suggestedTime,
+            rejectedAt: Date(),
+            reason: reason,
+            slotIdentifier: rejectionSlotIdentifier(for: suggestion.suggestedTime)
+        )
+
+        appState.suggestionRejections.append(memory)
+        pruneSuggestionRejections()
+    }
+
+    func recentSuggestionRejections(for date: Date) -> [SuggestionRejectionMemory] {
+        pruneSuggestionRejections()
+        return appState.suggestionRejections.filter { Calendar.current.isDate($0.suggestedTime, inSameDayAs: date) }
     }
     
     /// Get all items related to a specific emoji (for consistency checking)

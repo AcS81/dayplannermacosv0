@@ -1210,10 +1210,13 @@ class AIService: ObservableObject {
                 return UUID(uuidString: rawString)
             }
             let explanation = eventData["explanation"] as? String ?? "AI-generated activity"
+            let startTimeString = eventData["startTime"] as? String
+            let parsedStartTime = parseSuggestionDate(from: startTimeString, fallback: Date())
+            let scheduledTime = adjustSuggestedDate(parsedStartTime, extractedTimeDescription: analysis.extractedEntities["time"])
             let suggestion = Suggestion(
                 title: eventData["title"] as? String ?? "New Activity",
                 duration: TimeInterval((eventData["duration"] as? Int ?? 1800)),
-                suggestedTime: Date(),
+                suggestedTime: scheduledTime,
                 energy: EnergyType(rawValue: eventData["energy"] as? String ?? "daylight") ?? .daylight,
                 emoji: eventData["emoji"] as? String ?? "📋",
                 explanation: explanation,
@@ -1241,7 +1244,7 @@ class AIService: ObservableObject {
                 ],
                 confidence: analysis.confidence
             )
-            
+
         } catch {
             return AIResponse(
                 text: "I'll help you schedule that activity",
@@ -1251,6 +1254,80 @@ class AIService: ObservableObject {
                 confidence: analysis.confidence
             )
         }
+    }
+
+    private func parseSuggestionDate(from rawValue: String?, fallback: Date) -> Date {
+        guard let rawValue, !rawValue.isEmpty else { return fallback }
+
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let parsed = isoFormatter.date(from: rawValue) {
+            return parsed
+        }
+
+        isoFormatter.formatOptions = [.withInternetDateTime]
+        if let parsed = isoFormatter.date(from: rawValue) {
+            return parsed
+        }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone.current
+
+        let candidateFormats = [
+            "yyyy-MM-dd'T'HH:mm:ss",
+            "yyyy-MM-dd HH:mm",
+            "yyyy/MM/dd HH:mm"
+        ]
+
+        for format in candidateFormats {
+            formatter.dateFormat = format
+            if let parsed = formatter.date(from: rawValue) {
+                return parsed
+            }
+        }
+
+        formatter.dateFormat = "HH:mm"
+        if let timeOnly = formatter.date(from: rawValue) {
+            let calendar = Calendar.current
+            var components = calendar.dateComponents([.year, .month, .day], from: Date())
+            let timeComponents = calendar.dateComponents([.hour, .minute], from: timeOnly)
+            components.hour = timeComponents.hour
+            components.minute = timeComponents.minute
+            return calendar.date(from: components) ?? fallback
+        }
+
+        return fallback
+    }
+
+    private func adjustSuggestedDate(_ date: Date, extractedTimeDescription: String?) -> Date {
+        var adjusted = date
+        guard let extractedTimeDescription else { return normalizedFutureDate(from: adjusted) }
+
+        let description = extractedTimeDescription.lowercased()
+        let calendar = Calendar.current
+
+        if description.contains("tomorrow") && adjusted < Date() {
+            adjusted = calendar.date(byAdding: .day, value: 1, to: adjusted) ?? adjusted
+        } else if description.contains("next week") && adjusted < Date() {
+            adjusted = calendar.date(byAdding: .day, value: 7, to: adjusted) ?? adjusted
+        } else if description.contains("next month") && adjusted < Date() {
+            adjusted = calendar.date(byAdding: .month, value: 1, to: adjusted) ?? adjusted
+        } else if description.contains("next") && adjusted < Date() {
+            adjusted = calendar.date(byAdding: .day, value: 1, to: adjusted) ?? adjusted
+        }
+
+        return normalizedFutureDate(from: adjusted)
+    }
+
+    private func normalizedFutureDate(from date: Date) -> Date {
+        var candidate = date
+        let calendar = Calendar.current
+        while candidate < Date().addingTimeInterval(-300) {
+            guard let nextDay = calendar.date(byAdding: .day, value: 1, to: candidate) else { break }
+            candidate = nextDay
+        }
+        return candidate
     }
     
     private func parseGoalCreationResponse(_ content: String, analysis: MessageActionAnalysis) throws -> AIResponse {

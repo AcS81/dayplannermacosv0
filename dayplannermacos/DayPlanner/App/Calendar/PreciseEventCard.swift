@@ -15,8 +15,12 @@ struct FixedPositionEventCard: View {
     @State private var dragOffset: CGSize = .zero
     @State private var isDragging = false
     @State private var showingDetails = false
-    
+
     private let calendar = Calendar.current
+
+    private var displayTitle: String {
+        block.confirmationState == .confirmed ? "🔒 \(block.title)" : block.title
+    }
     
     var body: some View {
         VStack(spacing: 0) {
@@ -41,12 +45,12 @@ struct FixedPositionEventCard: View {
                     
                     // Block content
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(block.title)
+                        Text(displayTitle)
                             .font(.subheadline)
                             .fontWeight(.medium)
                             .foregroundStyle(.primary)
                             .lineLimit(durationBasedLineLimit)
-                        
+
                         HStack(spacing: 4) {
                             Text(block.startTime.timeString)
                                 .font(.caption)
@@ -778,13 +782,17 @@ struct CleanEventCard: View {
     let block: TimeBlock
     let onDrag: (CGPoint) -> Void
     let onDrop: (Date) -> Void
-    
+
     @EnvironmentObject private var dataManager: AppDataManager
     @State private var dragOffset: CGSize = .zero
     @State private var isDragging = false
     @State private var showingDetails = false
-    
+
     private let calendar = Calendar.current
+
+    private var displayTitle: String {
+        block.confirmationState == .confirmed ? "🔒 \(block.title)" : block.title
+    }
     
     var body: some View {
         Button(action: { showingDetails = true }) {
@@ -801,12 +809,12 @@ struct CleanEventCard: View {
                 
                 // Block content
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(block.title)
+                    Text(displayTitle)
                         .font(.subheadline)
                         .fontWeight(.medium)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                    
+
                     HStack(spacing: 4) {
                         Text(block.startTime.timeString)
                             .font(.caption)
@@ -1002,12 +1010,16 @@ struct EnhancedTimeBlockCard: View {
     let onDrag: (CGPoint) -> Void
     let onDrop: (Date) -> Void
     let allBlocks: [TimeBlock] // For chain gap checking
-    
+
     @EnvironmentObject private var dataManager: AppDataManager
     @State private var dragOffset: CGSize = .zero
     @State private var isDragging = false
     @State private var showingDetails = false
     @State private var activeTab: EventTab = .details
+
+    private var displayTitle: String {
+        block.confirmationState == .confirmed ? "🔒 \(block.title)" : block.title
+    }
     
     var body: some View {
         VStack(spacing: 0) {
@@ -1025,12 +1037,12 @@ struct EnhancedTimeBlockCard: View {
                 
                     // Block content
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(block.title)
+                    Text(displayTitle)
                         .font(.subheadline)
                         .fontWeight(.medium)
                         .foregroundStyle(.primary)
                         .lineLimit(2)
-                    
+
                     HStack(spacing: 6) {
                         Text(timeString(from: block.startTime))
                             .font(.caption)
