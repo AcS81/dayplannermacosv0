@@ -27,6 +27,7 @@ struct EnhancedDayView: View {
     @State private var selectedGhostIDs: Set<UUID> = []
     @State private var refreshTask: Task<Void, Never>? = nil
     @State private var diagnosticsOverride = false
+    @State private var rejectionMemory: [String: Int] = [:]
     
     private let onAcceptanceInfoChange: (GhostAcceptanceInfo?) -> Void
     
@@ -72,7 +73,8 @@ struct EnhancedDayView: View {
                     ghostSuggestions: ghostSuggestions,
                     dayStartHour: dayStartHour,
                     selectedGhosts: $selectedGhostIDs,
-                    onGhostToggle: toggleGhostSelection
+                    onGhostToggle: toggleGhostSelection,
+                    onGhostDismiss: dismissGhost
                 )
                 .padding(.trailing, 2)
                 .padding(.bottom, ghostAcceptanceInset)
@@ -84,6 +86,7 @@ struct EnhancedDayView: View {
         .onChange(of: selectedDate) { oldValue, newValue in
             diagnosticsOverride = false
             dataManager.diagnosticsGhostOverrideActive = false
+            rejectionMemory.removeAll()
             dataManager.switchToDay(newValue)
             Task { @MainActor in
                 await refreshGhosts(force: true)
@@ -109,6 +112,7 @@ struct EnhancedDayView: View {
                 selectedGhostIDs.removeAll()
                 diagnosticsOverride = false
                 dataManager.diagnosticsGhostOverrideActive = false
+                rejectionMemory.removeAll()
                 onAcceptanceInfoChange(nil)
             }
         }
@@ -216,8 +220,33 @@ struct EnhancedDayView: View {
         } else {
             selectedGhostIDs.insert(suggestion.id)
         }
-        
+
         updateAcceptanceInfo()
+    }
+
+    private func dismissGhost(_ suggestion: Suggestion) {
+        dataManager.rejectSuggestion(suggestion, reason: "User dismissed ghost recommendation")
+        let key = slotKey(for: suggestion.suggestedTime)
+        rejectionMemory[key, default: 0] += 1
+
+        let removal = {
+            ghostSuggestions.removeAll { $0.id == suggestion.id }
+        }
+
+        if reduceMotion {
+            removal()
+        } else {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                removal()
+            }
+        }
+
+        selectedGhostIDs.remove(suggestion.id)
+        updateAcceptanceInfo()
+
+        Task { @MainActor in
+            await refreshGhosts(reason: .rejectedSuggestion)
+        }
     }
 }
 
@@ -258,6 +287,7 @@ private extension EnhancedDayView {
         var placedSuggestions = dataManager.prioritizeSuggestions(rawSuggestions)
         assignTimes(to: &placedSuggestions, for: selectedDate)
         placedSuggestions = normalizeSuggestions(placedSuggestions)
+        applyRejectionMemory(to: &placedSuggestions)
         placedSuggestions.sort { $0.suggestedTime < $1.suggestedTime }
         if force || shouldUpdateGhosts(current: ghostSuggestions, new: placedSuggestions) {
             if reduceMotion {
@@ -351,6 +381,8 @@ private extension EnhancedDayView {
                 startTime = adjustedStart
             }
 
+            startTime = adjustedStartTime(startTime, within: gap, minimumDuration: minimumDuration)
+
             if startTime >= gap.end {
                 gaps.remove(at: index)
                 continue
@@ -433,7 +465,70 @@ private extension EnhancedDayView {
         let delta = remainder == 0 ? 0 : 5 - remainder
         return calendar.date(byAdding: .minute, value: delta, to: date) ?? date
     }
-    
+
+    func adjustedStartTime(_ proposedStart: Date, within gap: TimeGap, minimumDuration: TimeInterval) -> Date {
+        guard !rejectionMemory.isEmpty else { return proposedStart }
+        var candidate = proposedStart
+        var attempts = 0
+        let maxAttempts = 6
+
+        while attempts < maxAttempts {
+            let key = slotKey(for: candidate)
+            guard let rejectionCount = rejectionMemory[key], rejectionCount > 0 else { break }
+            let shifted = candidate.addingTimeInterval(15 * 60)
+            if shifted.addingTimeInterval(minimumDuration) > gap.end {
+                break
+            }
+            candidate = snapUpToNearestFiveMinutes(shifted)
+            attempts += 1
+        }
+
+        return candidate
+    }
+
+    func applyRejectionMemory(to suggestions: inout [Suggestion]) {
+        guard !rejectionMemory.isEmpty else { return }
+        suggestions = suggestions.map { suggestion in
+            var updated = suggestion
+            let key = slotKey(for: suggestion.suggestedTime)
+            if let count = rejectionMemory[key], count > 0 {
+                let baseWeight = updated.weight ?? 0.5
+                let penalty = min(0.6, Double(count) * 0.15)
+                updated.weight = max(0, baseWeight * (1 - penalty))
+                let note = rejectionNote(for: count)
+                if !note.isEmpty {
+                    if updated.explanation.isEmpty {
+                        updated.explanation = note
+                    } else if !updated.explanation.contains(note) {
+                        updated.explanation += "\n" + note
+                    }
+                }
+            }
+            return updated
+        }
+    }
+
+    func slotKey(for time: Date) -> String {
+        let calendar = Calendar.current
+        let dayStart = calendar.startOfDay(for: selectedDate)
+        let minutes = max(0, Int(time.timeIntervalSince(dayStart) / 60))
+        let bucket = (minutes / 15) * 15
+        return "\(dayStart.timeIntervalSinceReferenceDate)|\(bucket)"
+    }
+
+    private func rejectionNote(for count: Int) -> String {
+        switch count {
+        case 1:
+            return "Adjusted after you dismissed this window."
+        case 2:
+            return "Shifted later in the day based on your feedback."
+        case _ where count >= 3:
+            return "Prioritising alternate times after several dismissals."
+        default:
+            return ""
+        }
+    }
+
     func normalizeSuggestions(_ suggestions: [Suggestion]) -> [Suggestion] {
         let existingMap = Dictionary(uniqueKeysWithValues: ghostSuggestions.map { (fingerprint(for: $0), $0.id) })
         return suggestions.map { suggestion in
