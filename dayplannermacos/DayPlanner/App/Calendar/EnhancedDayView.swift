@@ -73,7 +73,8 @@ struct EnhancedDayView: View {
                     ghostSuggestions: ghostSuggestions,
                     dayStartHour: dayStartHour,
                     selectedGhosts: $selectedGhostIDs,
-                    onGhostToggle: toggleGhostSelection
+                    onGhostToggle: toggleGhostSelection,
+                    onGhostReject: rejectGhost
                 )
                 .padding(.trailing, 2)
                 .padding(.bottom, ghostAcceptanceInset)
@@ -203,9 +204,29 @@ struct EnhancedDayView: View {
         } else {
             selectedGhostIDs.insert(suggestion.id)
         }
-        
+
         // Push state changes to calendar panel via direct callback
         onGhostAcceptanceChange?(acceptanceInfo)
+    }
+
+    private func rejectGhost(_ suggestion: Suggestion) {
+        dataManager.rejectSuggestion(suggestion, reason: "time slot dismissed")
+        dataManager.registerGhostRejection(for: suggestion)
+        selectedGhostIDs.remove(suggestion.id)
+        let removal = {
+            ghostSuggestions.removeAll { $0.id == suggestion.id }
+        }
+        if reduceMotion {
+            removal()
+        } else {
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) {
+                removal()
+            }
+        }
+        onGhostAcceptanceChange?(acceptanceInfo)
+        Task { @MainActor in
+            await refreshGhosts(force: false, reason: .rejectedSuggestion)
+        }
     }
 }
 
@@ -336,6 +357,18 @@ private extension EnhancedDayView {
             var startTime = snapUpToNearestFiveMinutes(adjustedStart)
             if startTime < adjustedStart {
                 startTime = adjustedStart
+            }
+
+            if let adjustedStartTime = dataManager.adjustedGhostStartTime(
+                for: selectedDate,
+                proposedStart: startTime,
+                duration: suggestion.duration,
+                gapEnd: gap.end
+            ) {
+                startTime = snapUpToNearestFiveMinutes(adjustedStartTime)
+            } else {
+                gaps.remove(at: index)
+                continue
             }
 
             if startTime >= gap.end {
