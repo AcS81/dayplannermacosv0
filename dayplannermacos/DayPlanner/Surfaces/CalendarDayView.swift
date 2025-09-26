@@ -9,87 +9,138 @@ import SwiftUI
 
 // MARK: - Main Calendar Day View
 
-/// A proper calendar-style day view with aligned time slots and working drag & drop
+/// A proper calendar-style day view with aligned time slots, drag & drop, and infinite day scrolling
 struct CalendarDayView: View {
     @EnvironmentObject private var dataManager: AppDataManager
-    @State private var selectedDate: Date = Date()
+    @State private var selectedDate: Date = Calendar.current.startOfDay(for: Date())
+    @State private var visibleDates: [Date] = []
     @State private var draggedBlock: TimeBlock?
     @State private var dragOffset: CGSize = .zero
     @State private var showingBlockCreation = false
-    @State private var creationTime: Date? = nil
-    
+    @State private var creationTime: Date?
+    @State private var headerDirection: ScrollDirection = .none
+    @State private var pendingScrollTarget: Date?
+    @State private var hasInitializedScroll = false
+
     // Constants for layout calculations
     private let hourHeight: CGFloat = 80
     private let pixelsPerMinute: CGFloat = 80 / 60 // 80px per hour = ~1.33px per minute
     private let sidebarWidth: CGFloat = 70
-    
+    private let maxVisibleDays: Int = 9
+    private let calendar = Calendar.current
+
+    private static let dayIdentifierFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        return formatter
+    }()
+
+    private var dayHeight: CGFloat { hourHeight * 24 }
+
     var body: some View {
         GeometryReader { geometry in
-            HStack(spacing: 0) {
-                // Time sidebar
-                TimeSidebar(
-                    hourHeight: hourHeight,
-                    selectedDate: selectedDate
-                )
-                .frame(width: sidebarWidth)
-                
-                // Main timeline area
+            VStack(spacing: 0) {
+                AnimatedDateHeader(date: selectedDate, direction: headerDirection)
+                    .padding(.horizontal)
+
+                Divider()
+
                 ScrollViewReader { proxy in
                     ScrollView(.vertical, showsIndicators: true) {
-                        ZStack(alignment: .topLeading) {
-                            // Hour grid background
-                            TimelineGrid(
-                                hourHeight: hourHeight,
-                                width: geometry.size.width - sidebarWidth
-                            )
-                            
-                            // Events overlay
-                            EventsOverlay(
-                                blocks: blocksForSelectedDate,
-                                hourHeight: hourHeight,
-                                pixelsPerMinute: pixelsPerMinute,
-                                containerWidth: geometry.size.width - sidebarWidth,
-                                selectedDate: selectedDate,
-                                onEventTap: handleEventTap,
-                                onEventDrag: handleEventDrag,
-                                onEventDrop: handleEventDrop,
-                                onEventResize: handleEventResize,
-                                draggedBlock: $draggedBlock
-                            )
-                            
-                            // Drag indicator line
-                            if let draggedBlock = draggedBlock {
-                                DragIndicatorLine(
-                                    draggedBlock: draggedBlock,
-                                    dragOffset: dragOffset,
+                        LazyVStack(spacing: 0) {
+                            ForEach(visibleDates, id: \.self) { date in
+                                let dayId = dayIdentifier(for: date)
+                                DayTimelineSection(
+                                    date: date,
+                                    idPrefix: dayId,
+                                    blocks: blocks(for: date),
                                     hourHeight: hourHeight,
                                     pixelsPerMinute: pixelsPerMinute,
-                                    containerWidth: geometry.size.width - sidebarWidth
+                                    sidebarWidth: sidebarWidth,
+                                    containerWidth: geometry.size.width - sidebarWidth,
+                                    draggedBlock: $draggedBlock,
+                                    dragOffset: dragOffset,
+                                    onEventTap: handleEventTap,
+                                    onEventDrag: handleEventDrag,
+                                    onEventDrop: handleEventDrop,
+                                    onEventResize: handleEventResize,
+                                    onTimelineTap: handleTimelineClick
                                 )
+                                .frame(height: dayHeight)
+                                .id(dayId)
+                                .background(
+                                    GeometryReader { sectionGeometry in
+                                        Color.clear.preference(
+                                            key: DayPositionPreferenceKey.self,
+                                            value: [calendar.startOfDay(for: date): sectionGeometry.frame(in: .named("timelineScroll")).minY]
+                                        )
+                                    }
+                                )
+                                .onAppear {
+                                    handleDayAppear(date)
+                                }
                             }
                         }
-                        .frame(height: hourHeight * 24) // 24 hours
-                        .contentShape(Rectangle())
-                        .onTapGesture { location in
-                            handleTimelineClick(location: location)
+                    }
+                    .coordinateSpace(name: "timelineScroll")
+                    .scrollDisabled(draggedBlock != nil)
+                    .onPreferenceChange(DayPositionPreferenceKey.self) { positions in
+                        updateSelectedDateIfNeeded(positions: positions, containerHeight: geometry.size.height)
+                    }
+                    .onChange(of: visibleDates) { _ in
+                        guard let pendingScrollTarget else { return }
+                        if visibleDates.contains(where: { calendar.isDate($0, inSameDayAs: pendingScrollTarget) }) {
+                            DispatchQueue.main.async {
+                                scrollToDate(pendingScrollTarget, proxy: proxy, animated: hasInitializedScroll)
+                                hasInitializedScroll = true
+                                self.pendingScrollTarget = nil
+                            }
                         }
                     }
-                    .scrollDisabled(draggedBlock != nil) // Prevent scroll during drag
+                    .onChange(of: selectedDate) { _, newValue in
+                        dataManager.switchToDay(newValue)
+                        guard let pendingScrollTarget else { return }
+                        if visibleDates.contains(where: { calendar.isDate($0, inSameDayAs: pendingScrollTarget) }) {
+                            DispatchQueue.main.async {
+                                scrollToDate(pendingScrollTarget, proxy: proxy, animated: hasInitializedScroll)
+                                hasInitializedScroll = true
+                                self.pendingScrollTarget = nil
+                            }
+                        } else {
+                            ensureDatesInclude(pendingScrollTarget)
+                        }
+                    }
                     .onAppear {
-                        scrollToCurrentHour(proxy: proxy)
+                        if visibleDates.isEmpty {
+                            let initial = calendar.startOfDay(for: dataManager.appState.currentDay.date)
+                            selectedDate = initial
+                            initializeVisibleDates(centeredOn: initial)
+                            pendingScrollTarget = initial
+                            dataManager.switchToDay(initial)
+                        }
                     }
                 }
             }
         }
-        .navigationTitle(selectedDate.formatted(date: .complete, time: .omitted))
+        .navigationTitle("")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                DatePicker("Select Date", selection: $selectedDate, displayedComponents: .date)
-                    .datePickerStyle(.compact)
+                DatePicker(
+                    "Select Date",
+                    selection: Binding(
+                        get: { selectedDate },
+                        set: { newValue in
+                            selectDate(newValue, shouldScroll: true)
+                        }
+                    ),
+                    displayedComponents: .date
+                )
+                .datePickerStyle(.compact)
             }
         }
         .sheet(isPresented: $showingBlockCreation) {
-            if let creationTime = creationTime {
+            if let creationTime {
                 EventCreationSheet(
                     startTime: creationTime,
                     onSave: { block in
@@ -102,96 +153,309 @@ struct CalendarDayView: View {
                 )
             }
         }
-        .onChange(of: selectedDate) { oldValue, newValue in
-            dataManager.switchToDay(newValue)
-        }
     }
-    
-    // MARK: - Helper Properties
-    
-    private var blocksForSelectedDate: [TimeBlock] {
-        dataManager.appState.currentDay.blocks.filter { block in
-            Calendar.current.isDate(block.startTime, inSameDayAs: selectedDate)
-        }.sorted { $0.startTime < $1.startTime }
-    }
-    
+
     // MARK: - Event Handlers
-    
-    private func handleTimelineClick(location: CGPoint) {
-        guard draggedBlock == nil else { return }
-        
-        let hour = Int(location.y / hourHeight)
-        let minute = Int((location.y.truncatingRemainder(dividingBy: hourHeight)) / pixelsPerMinute)
-        
-        let calendar = Calendar.current
-        if let newTime = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: selectedDate) {
-            creationTime = newTime
-            showingBlockCreation = true
-        }
-    }
-    
+
     private func handleEventTap(_ block: TimeBlock) {
         // Handle event tap - could show details or quick actions
         print("Tapped event: \(block.title)")
     }
-    
+
     private func handleEventDrag(_ block: TimeBlock, dragValue: DragGesture.Value) {
         draggedBlock = block
         dragOffset = dragValue.translation
     }
-    
+
     private func handleEventDrop(_ block: TimeBlock, newStartTime: Date) {
         var updatedBlock = block
         updatedBlock.startTime = newStartTime
         updatedBlock.glassState = .solid
-        
+
         dataManager.updateTimeBlock(updatedBlock)
-        
+
         // Clear drag state
         draggedBlock = nil
         dragOffset = .zero
-        
-        // Provide feedback
-        // Event moved successfully
+
         dataManager.save()
     }
-    
+
     private func handleEventResize(_ block: TimeBlock, newDuration: TimeInterval) {
         var updatedBlock = block
         updatedBlock.duration = max(15 * 60, newDuration) // Minimum 15 minutes
         dataManager.updateTimeBlock(updatedBlock)
     }
-    
-    private func scrollToCurrentHour(proxy: ScrollViewProxy) {
-        let currentHour = Calendar.current.component(.hour, from: Date())
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            withAnimation(.easeInOut(duration: 0.6)) {
-                proxy.scrollTo("hour-\(currentHour)", anchor: .center)
+
+    private func handleTimelineClick(for date: Date, location: CGPoint) {
+        guard draggedBlock == nil else { return }
+
+        if !calendar.isDate(date, inSameDayAs: selectedDate) {
+            selectDate(date, shouldScroll: false)
+        }
+
+        let constrainedY = max(0, min(location.y, dayHeight))
+        let hour = max(0, min(23, Int(constrainedY / hourHeight)))
+        let minute = Int((constrainedY.truncatingRemainder(dividingBy: hourHeight)) / pixelsPerMinute)
+
+        let normalizedDate = calendar.startOfDay(for: date)
+        if let newTime = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: normalizedDate) {
+            creationTime = newTime
+            showingBlockCreation = true
+        }
+    }
+
+    // MARK: - Timeline Management
+
+    private func initializeVisibleDates(centeredOn date: Date) {
+        visibleDates = generateDates(around: date, radius: 3)
+    }
+
+    private func generateDates(around date: Date, radius: Int) -> [Date] {
+        let normalized = calendar.startOfDay(for: date)
+        return (-radius...radius).compactMap { offset in
+            calendar.date(byAdding: .day, value: offset, to: normalized)
+        }
+    }
+
+    private func ensureDatesInclude(_ date: Date) {
+        if !visibleDates.contains(where: { calendar.isDate($0, inSameDayAs: date) }) {
+            visibleDates = generateDates(around: date, radius: 3)
+        }
+    }
+
+    private func handleDayAppear(_ date: Date) {
+        guard let index = visibleDates.firstIndex(where: { calendar.isDate($0, inSameDayAs: date) }) else { return }
+
+        if index == 0, let previous = calendar.date(byAdding: .day, value: -1, to: date) {
+            prependDay(previous)
+        }
+
+        if index == visibleDates.count - 1, let next = calendar.date(byAdding: .day, value: 1, to: date) {
+            appendDay(next)
+        }
+    }
+
+    private func prependDay(_ date: Date) {
+        let normalized = calendar.startOfDay(for: date)
+        guard !visibleDates.contains(where: { calendar.isDate($0, inSameDayAs: normalized) }) else { return }
+        visibleDates.insert(normalized, at: 0)
+        trimVisibleDatesIfNeeded()
+    }
+
+    private func appendDay(_ date: Date) {
+        let normalized = calendar.startOfDay(for: date)
+        guard !visibleDates.contains(where: { calendar.isDate($0, inSameDayAs: normalized) }) else { return }
+        visibleDates.append(normalized)
+        trimVisibleDatesIfNeeded()
+    }
+
+    private func trimVisibleDatesIfNeeded() {
+        while visibleDates.count > maxVisibleDays {
+            guard let first = visibleDates.first, let last = visibleDates.last else { break }
+            let firstDistance = abs(first.timeIntervalSince(selectedDate))
+            let lastDistance = abs(last.timeIntervalSince(selectedDate))
+            if firstDistance > lastDistance {
+                visibleDates.removeFirst()
+            } else {
+                visibleDates.removeLast()
             }
         }
     }
-    
-    
-    private func getTimeContext(for date: Date) -> String {
-        let hour = Calendar.current.component(.hour, from: date)
-        switch hour {
-        case 6..<9: return "early morning"
-        case 9..<12: return "morning"
-        case 12..<14: return "midday"
-        case 14..<17: return "afternoon"
-        case 17..<20: return "evening"
-        case 20..<22: return "late evening"
-        default: return "night"
+
+    private func updateSelectedDateIfNeeded(positions: [Date: CGFloat], containerHeight: CGFloat) {
+        guard !positions.isEmpty else { return }
+        let threshold = containerHeight / 3
+
+        for (date, minY) in positions {
+            let lowerBound = minY
+            let upperBound = minY + dayHeight
+            if threshold >= lowerBound && threshold < upperBound {
+                selectDate(date, shouldScroll: false)
+                break
+            }
         }
     }
+
+    private func selectDate(_ date: Date, shouldScroll: Bool) {
+        let normalized = calendar.startOfDay(for: date)
+        guard normalized != selectedDate else { return }
+
+        headerDirection = normalized > selectedDate ? .forward : .backward
+
+        if shouldScroll {
+            pendingScrollTarget = normalized
+        } else {
+            pendingScrollTarget = nil
+        }
+
+        selectedDate = normalized
+    }
+
+    private func scrollToDate(_ date: Date, proxy: ScrollViewProxy, animated: Bool) {
+        let normalized = calendar.startOfDay(for: date)
+        let hour = calendar.isDateInToday(normalized) ? calendar.component(.hour, from: Date()) : 8
+        let anchorY: CGFloat = calendar.isDateInToday(normalized) ? 0.33 : 0.0
+        let targetId = hourIdentifier(for: normalized, hour: hour)
+
+        let scrollAction = {
+            proxy.scrollTo(targetId, anchor: UnitPoint(x: 0.5, y: anchorY))
+        }
+
+        if animated {
+            withAnimation(.easeInOut(duration: 0.35)) {
+                scrollAction()
+            }
+        } else {
+            scrollAction()
+        }
+    }
+
+    private func blocks(for date: Date) -> [TimeBlock] {
+        let normalized = calendar.startOfDay(for: date)
+        if calendar.isDate(normalized, inSameDayAs: dataManager.appState.currentDay.date) {
+            return dataManager.appState.currentDay.blocks.sorted { $0.startTime < $1.startTime }
+        }
+
+        if let historicalDay = dataManager.appState.historicalDays.first(where: { calendar.isDate($0.date, inSameDayAs: normalized) }) {
+            return historicalDay.blocks.sorted { $0.startTime < $1.startTime }
+        }
+
+        return []
+    }
+
+    private func dayIdentifier(for date: Date) -> String {
+        Self.dayIdentifierFormatter.string(from: calendar.startOfDay(for: date))
+    }
+
+    private func hourIdentifier(for date: Date, hour: Int) -> String {
+        "\(dayIdentifier(for: date))-hour-\(hour)"
+    }
+}
+
+// MARK: - Animated Header & Section Views
+
+private struct AnimatedDateHeader: View {
+    let date: Date
+    let direction: ScrollDirection
+
+    private static let formatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEE, MMM d"
+        return formatter
+    }()
+
+    var body: some View {
+        ZStack {
+            Text(Self.formatter.string(from: date))
+                .font(.title2.weight(.semibold))
+                .id(date)
+                .transition(transition)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .animation(.easeInOut(duration: 0.3), value: date)
+    }
+
+    private var transition: AnyTransition {
+        switch direction {
+        case .forward:
+            return .asymmetric(
+                insertion: .move(edge: .trailing).combined(with: .opacity),
+                removal: .move(edge: .leading).combined(with: .opacity)
+            )
+        case .backward:
+            return .asymmetric(
+                insertion: .move(edge: .leading).combined(with: .opacity),
+                removal: .move(edge: .trailing).combined(with: .opacity)
+            )
+        case .none:
+            return .opacity
+        }
+    }
+}
+
+private struct DayTimelineSection: View {
+    let date: Date
+    let idPrefix: String
+    let blocks: [TimeBlock]
+    let hourHeight: CGFloat
+    let pixelsPerMinute: CGFloat
+    let sidebarWidth: CGFloat
+    let containerWidth: CGFloat
+    @Binding var draggedBlock: TimeBlock?
+    let dragOffset: CGSize
+    let onEventTap: (TimeBlock) -> Void
+    let onEventDrag: (TimeBlock, DragGesture.Value) -> Void
+    let onEventDrop: (TimeBlock, Date) -> Void
+    let onEventResize: (TimeBlock, TimeInterval) -> Void
+    let onTimelineTap: (Date, CGPoint) -> Void
+
+    private let calendar = Calendar.current
+
+    var body: some View {
+        HStack(spacing: 0) {
+            TimeSidebar(hourHeight: hourHeight, date: date, idPrefix: idPrefix)
+                .frame(width: sidebarWidth)
+
+            ZStack(alignment: .topLeading) {
+                TimelineGrid(
+                    hourHeight: hourHeight,
+                    width: containerWidth
+                )
+
+                EventsOverlay(
+                    blocks: blocks,
+                    hourHeight: hourHeight,
+                    pixelsPerMinute: pixelsPerMinute,
+                    containerWidth: containerWidth,
+                    selectedDate: date,
+                    onEventTap: onEventTap,
+                    onEventDrag: onEventDrag,
+                    onEventDrop: onEventDrop,
+                    onEventResize: onEventResize,
+                    draggedBlock: $draggedBlock
+                )
+
+                if let draggedBlock,
+                   calendar.isDate(draggedBlock.startTime, inSameDayAs: date) {
+                    DragIndicatorLine(
+                        draggedBlock: draggedBlock,
+                        dragOffset: dragOffset,
+                        hourHeight: hourHeight,
+                        pixelsPerMinute: pixelsPerMinute,
+                        containerWidth: containerWidth
+                    )
+                }
+            }
+            .frame(height: hourHeight * 24)
+            .contentShape(Rectangle())
+            .onTapGesture { location in
+                onTimelineTap(date, location)
+            }
+        }
+    }
+}
+
+private struct DayPositionPreferenceKey: PreferenceKey {
+    static var defaultValue: [Date: CGFloat] = [:]
+
+    static func reduce(value: inout [Date: CGFloat], nextValue: () -> [Date: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { $1 })
+    }
+}
+
+private enum ScrollDirection {
+    case none, forward, backward
 }
 
 // MARK: - Time Sidebar
 
 struct TimeSidebar: View {
     let hourHeight: CGFloat
-    let selectedDate: Date
-    
+    let date: Date
+    let idPrefix: String
+
     var body: some View {
         VStack(spacing: 0) {
             ForEach(0..<24, id: \.self) { hour in
@@ -200,29 +464,29 @@ struct TimeSidebar: View {
                         .font(.caption)
                         .fontWeight(.medium)
                         .foregroundColor(isCurrentHour(hour) ? .blue : .secondary)
-                    
+
                     if hour < 23 {
                         Spacer()
                             .frame(height: hourHeight - 20)
                     }
                 }
                 .frame(height: hourHeight, alignment: .top)
-                .id("hour-\(hour)")
+                .id("\(idPrefix)-hour-\(hour)")
             }
         }
         .padding(.top, 10)
     }
-    
+
     private func formatHour(_ hour: Int) -> String {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
-        let date = Calendar.current.date(bySettingHour: hour, minute: 0, second: 0, of: Date()) ?? Date()
-        return formatter.string(from: date)
+        let referenceDate = Calendar.current.date(bySettingHour: hour, minute: 0, second: 0, of: date) ?? date
+        return formatter.string(from: referenceDate)
     }
-    
+
     private func isCurrentHour(_ hour: Int) -> Bool {
         let currentHour = Calendar.current.component(.hour, from: Date())
-        let isToday = Calendar.current.isDateInToday(selectedDate)
+        let isToday = Calendar.current.isDateInToday(date)
         return isToday && hour == currentHour
     }
 }
