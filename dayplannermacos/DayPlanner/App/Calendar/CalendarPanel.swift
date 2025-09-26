@@ -53,13 +53,10 @@ struct CalendarPanel: View {
                 .animation(.spring(response: 0.6, dampingFraction: 0.8), value: showingMonthView)
             }
             
-            // Day view - enhanced with liquid glass styling (only show when not in month view)
+            // Day view - enhanced with infinite scrolling and liquid glass styling (only show when not in month view)
             if !showingMonthView {
-                EnhancedDayView(
-                    selectedDate: $selectedDate,
-                    ghostSuggestions: $ghostSuggestions,
-                    showingRecommendations: $showingRecommendations,
-                    onAcceptanceInfoChange: handleGhostAcceptanceInfo
+                InfiniteDayScrollView(
+                    selectedDate: $selectedDate
                 )
                     .frame(maxHeight: showingTodoList ? nil : .infinity)
                     .transition(.asymmetric(
