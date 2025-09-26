@@ -671,7 +671,12 @@ class AIService: ObservableObject {
         """
         
         let response = try await generateCompletion(prompt: eventCreationPrompt)
-        return try parseEventCreationResponse(response, analysis: analysis)
+        return try parseEventCreationResponse(
+            response,
+            message: message,
+            analysis: analysis,
+            context: context
+        )
     }
     
     private func processGoalCreation(_ message: String, context: DayContext, analysis: MessageActionAnalysis) async throws -> AIResponse {
@@ -1189,12 +1194,17 @@ class AIService: ObservableObject {
         }
     }
     
-    private func parseEventCreationResponse(_ content: String, analysis: MessageActionAnalysis) throws -> AIResponse {
+    private func parseEventCreationResponse(
+        _ content: String,
+        message: String,
+        analysis: MessageActionAnalysis,
+        context: DayContext
+    ) throws -> AIResponse {
         let cleanContent = content
             .replacingOccurrences(of: "```json", with: "")
             .replacingOccurrences(of: "```", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        
+
         guard let jsonData = cleanContent.data(using: .utf8) else {
             throw AIError.invalidResponse
         }
@@ -1212,10 +1222,16 @@ class AIService: ObservableObject {
                 return UUID(uuidString: rawString)
             }
             let explanation = eventData["explanation"] as? String ?? "AI-generated activity"
+            let resolvedStartTime = resolveSuggestedStartTime(
+                eventData: eventData,
+                fallbackContext: context,
+                analysis: analysis,
+                originalMessage: message
+            )
             let suggestion = Suggestion(
                 title: eventData["title"] as? String ?? "New Activity",
                 duration: TimeInterval((eventData["duration"] as? Int ?? 1800)),
-                suggestedTime: Date(),
+                suggestedTime: resolvedStartTime,
                 energy: EnergyType(rawValue: eventData["energy"] as? String ?? "daylight") ?? .daylight,
                 emoji: eventData["emoji"] as? String ?? "📋",
                 explanation: explanation,
@@ -1254,6 +1270,204 @@ class AIService: ObservableObject {
             )
         }
     }
+
+    private func resolveSuggestedStartTime(
+        eventData: [String: Any],
+        fallbackContext: DayContext,
+        analysis: MessageActionAnalysis,
+        originalMessage: String
+    ) -> Date {
+        let calendar = Calendar.current
+        let contextTimeComponents = calendar.dateComponents([.hour, .minute, .second], from: fallbackContext.currentTime)
+        let baseContextDate = calendar.date(
+            bySettingHour: contextTimeComponents.hour ?? 9,
+            minute: contextTimeComponents.minute ?? 0,
+            second: contextTimeComponents.second ?? 0,
+            of: fallbackContext.date
+        ) ?? fallbackContext.date
+        let hints = collectTemporalHints(from: analysis, message: originalMessage)
+
+        if let rawStart = eventData["startTime"] as? String,
+           let parsedStart = parseISO8601Date(from: rawStart) ?? detectDate(in: rawStart, relativeTo: fallbackContext.date, hints: hints) {
+            return adjust(date: parsedStart, with: hints, preservingTimeFrom: parsedStart, context: fallbackContext)
+        }
+
+        var baseDate = baseContextDate
+        if let detectedDate = detectDate(in: originalMessage, relativeTo: fallbackContext.date, hints: hints) {
+            baseDate = detectedDate
+        } else if let extractedDate = analysis.extractedEntities["date"],
+                  let resolved = detectDate(in: extractedDate, relativeTo: fallbackContext.date, hints: hints) {
+            baseDate = resolved
+        }
+
+        if let timeHint = analysis.extractedEntities["time"],
+           let timeComponents = parseTimeComponents(from: timeHint) {
+            baseDate = calendar.date(bySettingHour: timeComponents.hour, minute: timeComponents.minute, second: 0, of: baseDate) ?? baseDate
+        }
+
+        return adjust(date: baseDate, with: hints, preservingTimeFrom: baseDate, context: fallbackContext)
+    }
+
+    private func collectTemporalHints(from analysis: MessageActionAnalysis, message: String) -> [String] {
+        var hints: [String] = [message.lowercased()]
+        if let dateHint = analysis.extractedEntities["date"] { hints.append(dateHint.lowercased()) }
+        if let timeHint = analysis.extractedEntities["time"] { hints.append(timeHint.lowercased()) }
+        return hints
+    }
+
+    private func parseISO8601Date(from raw: String) -> Date? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+        if let date = AIService.iso8601WithFractional.date(from: trimmed) {
+            return date
+        }
+        if let date = AIService.iso8601.date(from: trimmed) {
+            return date
+        }
+        let fallbacks = [
+            "yyyy-MM-dd'T'HH:mm:ss",
+            "yyyy-MM-dd HH:mm",
+            "yyyy-MM-dd'T'HH:mm"
+        ]
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone.current
+        for format in fallbacks {
+            formatter.dateFormat = format
+            if let date = formatter.date(from: trimmed) {
+                return date
+            }
+        }
+        return nil
+    }
+
+    private func detectDate(in text: String, relativeTo contextDate: Date, hints: [String]) -> Date? {
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue) else { return nil }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = detector.firstMatch(in: text, options: [], range: range),
+              let detectedDate = match.date else {
+            return nil
+        }
+
+        if isRelative(hints: hints) {
+            let calendar = Calendar.current
+            let baseStart = calendar.startOfDay(for: Date())
+            let detectedStart = calendar.startOfDay(for: detectedDate)
+            let offset = calendar.dateComponents([.day], from: baseStart, to: detectedStart).day ?? 0
+            let targetDay = calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: contextDate)) ?? contextDate
+            return combine(date: targetDay, withTimeFrom: detectedDate)
+        }
+
+        return detectedDate
+    }
+
+    private func isRelative(hints: [String]) -> Bool {
+        let keywords = ["tomorrow", "tonight", "next", "later", "weekend", "today"]
+        return hints.contains { hint in
+            keywords.contains { keyword in hint.contains(keyword) }
+        }
+    }
+
+    private func combine(date: Date, withTimeFrom reference: Date) -> Date {
+        let calendar = Calendar.current
+        let components = calendar.dateComponents([.hour, .minute, .second], from: reference)
+        return calendar.date(bySettingHour: components.hour ?? 9, minute: components.minute ?? 0, second: components.second ?? 0, of: date) ?? date
+    }
+
+    private func parseTimeComponents(from text: String) -> (hour: Int, minute: Int)? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.defaultDate = Date()
+        let formats = ["h a", "h:mm a", "HH:mm", "H:mm", "hh:mm a", "h"]
+        for format in formats {
+            formatter.dateFormat = format
+            if let date = formatter.date(from: trimmed) {
+                let calendar = Calendar.current
+                let comps = calendar.dateComponents([.hour, .minute], from: date)
+                return (comps.hour ?? 0, comps.minute ?? 0)
+            }
+        }
+        return nil
+    }
+
+    private func adjust(
+        date: Date,
+        with hints: [String],
+        preservingTimeFrom reference: Date,
+        context: DayContext
+    ) -> Date {
+        let calendar = Calendar.current
+        var result = date
+        let timeComponents = calendar.dateComponents([.hour, .minute, .second], from: reference)
+        let contextStart = calendar.startOfDay(for: context.date)
+        let flattenedHints = hints
+        let contains: (String) -> Bool = { keyword in
+            flattenedHints.contains { $0.contains(keyword) }
+        }
+
+        if contains("tomorrow") && calendar.isDate(result, inSameDayAs: context.date) {
+            if let newDay = calendar.date(byAdding: .day, value: 1, to: contextStart) {
+                result = calendar.date(bySettingHour: timeComponents.hour ?? 9, minute: timeComponents.minute ?? 0, second: timeComponents.second ?? 0, of: newDay) ?? newDay
+            }
+        }
+
+        if contains("next week") && calendar.isDate(result, inSameDayAs: context.date) {
+            if let newDay = calendar.date(byAdding: .weekOfYear, value: 1, to: contextStart) {
+                result = calendar.date(bySettingHour: timeComponents.hour ?? 9, minute: timeComponents.minute ?? 0, second: timeComponents.second ?? 0, of: newDay) ?? newDay
+            }
+        }
+
+        if contains("next month") && calendar.isDate(result, inSameDayAs: context.date) {
+            if let newDay = calendar.date(byAdding: .month, value: 1, to: contextStart) {
+                result = calendar.date(bySettingHour: timeComponents.hour ?? 9, minute: timeComponents.minute ?? 0, second: timeComponents.second ?? 0, of: newDay) ?? newDay
+            }
+        }
+
+        if contains("weekend") && calendar.isDate(result, inSameDayAs: context.date) {
+            if let weekendRange = calendar.nextWeekend(startingAfter: context.date) {
+                result = calendar.date(bySettingHour: timeComponents.hour ?? 9, minute: timeComponents.minute ?? 0, second: timeComponents.second ?? 0, of: weekendRange.start) ?? weekendRange.start
+            }
+        }
+
+        if let adjustedWeekday = adjustToNextWeekday(hints: flattenedHints, timeComponents: timeComponents, contextDate: context.date),
+           calendar.isDate(result, inSameDayAs: context.date) {
+            result = adjustedWeekday
+        }
+
+        return result
+    }
+
+    private func adjustToNextWeekday(
+        hints: [String],
+        timeComponents: DateComponents,
+        contextDate: Date
+    ) -> Date? {
+        guard let nextHint = hints.first(where: { $0.contains("next ") }) else { return nil }
+        let calendar = Calendar.current
+        let weekdays = calendar.weekdaySymbols.map { $0.lowercased() }
+        guard let index = weekdays.firstIndex(where: { nextHint.contains($0) }) else { return nil }
+        let targetWeekday = index + 1
+        let start = calendar.startOfDay(for: contextDate)
+        guard let nextDate = calendar.nextDate(after: start, matching: DateComponents(weekday: targetWeekday), matchingPolicy: .nextTime) else {
+            return nil
+        }
+        return calendar.date(bySettingHour: timeComponents.hour ?? 9, minute: timeComponents.minute ?? 0, second: timeComponents.second ?? 0, of: nextDate)
+    }
+
+    private static let iso8601WithFractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let iso8601: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
     
     private func parseGoalCreationResponse(_ content: String, analysis: MessageActionAnalysis) throws -> AIResponse {
         let cleanContent = content

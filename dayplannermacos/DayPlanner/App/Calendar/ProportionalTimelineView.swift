@@ -524,10 +524,10 @@ struct PreciseEventCard: View {
         }
         .overlay(alignment: .topTrailing) {
             if block.confirmationState == .confirmed {
-                Image(systemName: "checkmark.seal.fill")
-                    .font(.caption2)
-                    .foregroundStyle(.green)
+                Text("🔒")
+                    .font(.title3)
                     .padding(6)
+                    .accessibilityLabel("Confirmed")
             }
         }
         .onHover { hovering in

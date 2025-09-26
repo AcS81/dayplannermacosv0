@@ -71,6 +71,20 @@ private struct DateFormatters {
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter
     }()
+
+    static let confirmationTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    static let confirmationDayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter
+    }()
 }
 
 /// Simple, local-first data manager
@@ -105,6 +119,7 @@ class AppDataManager: ObservableObject {
     @Published private(set) var pendingMicroUpdateReasons: [MicroUpdateReason] = []
     @Published var diagnosticsGhostOverrideActive = false
     private var cancellables: Set<AnyCancellable> = []
+    private let confirmationNotePrefix = "🔒 Confirmed"
 
     func requestMicroUpdate(_ reason: MicroUpdateReason) {
         if !pendingMicroUpdateReasons.contains(reason) {
@@ -687,13 +702,12 @@ class AppDataManager: ObservableObject {
         guard let index = appState.currentDay.blocks.firstIndex(where: { $0.id == blockId }) else { return }
         var block = appState.currentDay.blocks[index]
         let trimmedNotes = notes?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let trimmedNotes, !trimmedNotes.isEmpty {
-            block.notes = trimmedNotes
-        }
+        let confirmationEntry = makeConfirmationNote(for: block, userNotes: trimmedNotes)
+        block.notes = appendConfirmationNote(confirmationEntry, to: block.notes)
         block.confirmationState = .confirmed
         block.glassState = .solid
         appState.currentDay.blocks[index] = block
-        
+
         let record = Record(
             blockId: block.id,
             title: block.title,
@@ -706,6 +720,7 @@ class AppDataManager: ObservableObject {
         )
         appState.records.append(record)
         appState.todoItems.removeAll { $0.followUp?.blockId == block.id }
+        recordBlockCompletion(block)
         save()
     }
     
@@ -719,6 +734,7 @@ class AppDataManager: ObservableObject {
             if block.glassState == .solid {
                 block.glassState = .liquid
             }
+            block.notes = removeLatestConfirmationNote(from: block.notes)
             appState.currentDay.blocks[blockIndex] = block
         }
         appState.records.remove(at: index)
@@ -753,6 +769,67 @@ class AppDataManager: ObservableObject {
         appState.todoItems.removeAll { $0.followUp?.blockId == block.id }
         appState.todoItems.insert(item, at: 0)
         save()
+    }
+
+    private func makeConfirmationNote(for block: TimeBlock, userNotes: String?) -> String {
+        let confirmationTime = DateFormatters.confirmationTimeFormatter.string(from: Date())
+        let blockDay = DateFormatters.confirmationDayFormatter.string(from: block.startTime)
+        var components: [String] = ["\(confirmationNotePrefix) at \(confirmationTime) on \(blockDay) – \(block.title)"]
+        if let userNotes, !userNotes.isEmpty {
+            components.append(userNotes)
+        }
+        let weatherSummary = weatherService.getWeatherContext()
+        if !weatherSummary.isEmpty && !weatherSummary.contains("Unknown") {
+            components.append(weatherSummary)
+        }
+        return components.joined(separator: " • ")
+    }
+
+    private func appendConfirmationNote(_ note: String, to existing: String?) -> String {
+        let trimmedExisting = existing?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmedExisting.isEmpty {
+            return note
+        } else {
+            return trimmedExisting + "\n" + note
+        }
+    }
+
+    private func removeLatestConfirmationNote(from notes: String?) -> String? {
+        guard let notes else { return nil }
+        var lines = notes.split(whereSeparator: \.isNewline, omittingEmptySubsequences: false).map(String.init)
+        while let last = lines.last, last.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            lines.removeLast()
+        }
+        guard let last = lines.last,
+              last.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(confirmationNotePrefix) else {
+            return notes
+        }
+        lines.removeLast()
+        while let last = lines.last, last.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            lines.removeLast()
+        }
+        if lines.isEmpty { return nil }
+        return lines.joined(separator: "\n")
+    }
+
+    private func recordBlockCompletion(_ block: TimeBlock) {
+        let blockData = TimeBlockData(
+            id: block.id.uuidString,
+            title: block.title,
+            emoji: block.emoji,
+            energy: block.energy,
+            duration: block.duration,
+            period: block.period
+        )
+        let event = BehaviorEvent(
+            .blockCompleted(blockData, success: true, actualDuration: block.duration),
+            context: EventContext(
+                energyLevel: block.energy,
+                mood: appState.currentDay.mood,
+                weatherCondition: weatherService.getWeatherContext()
+            )
+        )
+        patternEngine.recordBehavior(event)
     }
     
     // MARK: - Chain Operations
