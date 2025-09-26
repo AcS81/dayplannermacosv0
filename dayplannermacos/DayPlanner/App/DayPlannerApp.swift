@@ -96,6 +96,7 @@ struct ContentView: View {
     @State private var selectedDate = Date() // Shared date state across tabs
     @State private var showingSettingsPanel = false
     @State private var showingXPDisplay = false
+    @State private var isHoveringSettings = false
     @State private var showingMindPanel = false // Control mind panel visibility
     
     var body: some View {
@@ -108,20 +109,9 @@ struct ContentView: View {
                     aiConnected: aiService.isConnected,
                     showingMindPanel: $showingMindPanel,
                     hideSettingsButton: showingSettingsPanel,
+                    isHoveringSettings: $isHoveringSettings,
                     onSettingsTap: { 
-                        if showingSettingsPanel {
-                            showingSettings = true
-                        } else {
-                            withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
-                                showingSettingsPanel = true
-                            }
-                            // Show XP display after panel slides in
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                                withAnimation(.easeInOut(duration: 0.8)) {
-                                    showingXPDisplay = true
-                                }
-                            }
-                        }
+                        showingSettings = true
                     },
                     onDiagnosticsTap: { showingAIDiagnostics = true }
                 )
@@ -136,20 +126,13 @@ struct ContentView: View {
                 Spacer()
             }
             
-            // Animated Settings Strip - positioned at top to cover settings button
-            if showingSettingsPanel {
+            // Darker overlay for settings hover - positioned at top to darken the tab section
+            if isHoveringSettings {
                 VStack {
-                    AnimatedSettingsStrip(
+                    HoverSettingsOverlay(
                         xp: dataManager.appState.userXP,
                         xxp: dataManager.appState.userXXP,
-                        isVisible: showingSettingsPanel,
-                        showingXPDisplay: showingXPDisplay,
-                        onClose: {
-                            withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
-                                showingSettingsPanel = false
-                                showingXPDisplay = false
-                            }
-                        },
+                        isVisible: isHoveringSettings,
                         onSettingsTap: {
                             showingSettings = true
                         }
@@ -209,10 +192,9 @@ struct ContentView: View {
                 .environmentObject(aiService)
         }
         .onTapGesture {
-            if showingSettingsPanel {
-                withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
-                    showingSettingsPanel = false
-                    showingXPDisplay = false
+            if isHoveringSettings {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    isHoveringSettings = false
                 }
             }
         }
@@ -13199,19 +13181,60 @@ struct BlockCreationSheet: View {
     @State private var selectedEnergy: EnergyType = .daylight
     @State private var selectedEmoji: String = "🌊"
     @State private var duration: Int = 60 // minutes
+    @State private var aiSuggestions = ""
+    @State private var isGeneratingAI = false
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var aiService: AIService
     
     var body: some View {
         NavigationView {
             VStack(spacing: 24) {
-                // Title input
+                // Title input with AI assist
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Activity")
                         .font(.headline)
                     
-                    TextField("What would you like to do?", text: $title)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.body)
+                    HStack(spacing: 8) {
+                        TextField("What would you like to do?", text: $title)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.body)
+                        
+                        Button {
+                            generateAISuggestions()
+                        } label: {
+                            Image(systemName: "sparkles")
+                                .foregroundStyle(.blue)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(isGeneratingAI || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .help("AI Suggestions")
+                    }
+                    
+                    Button {
+                        enhanceWithAI()
+                    } label: {
+                        Label("Enhance with AI", systemImage: "wand.and.stars")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isGeneratingAI || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    
+                    if isGeneratingAI {
+                        HStack {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("AI is thinking...")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    
+                    if !aiSuggestions.isEmpty {
+                        Text(aiSuggestions)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .padding(12)
+                            .background(.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+                    }
                 }
                 
                 // Energy selection
@@ -13320,6 +13343,145 @@ struct BlockCreationSheet: View {
             }
         }
         .frame(width: 500, height: 600)
+    }
+    
+    // MARK: - AI Functions
+    
+    private func generateAISuggestions() {
+        guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        
+        isGeneratingAI = true
+        aiSuggestions = ""
+        
+        Task {
+            do {
+                let context = DayContext(
+                    date: suggestedTime,
+                    existingBlocks: [],
+                    currentEnergy: selectedEnergy,
+                    preferredEmojis: [selectedEmoji],
+                    availableTime: TimeInterval(duration * 60),
+                    mood: .crystal
+                )
+                
+                let response = try await aiService.processMessage(
+                    "Suggest improvements for this activity: \(title). Consider energy level, duration, and emoji.",
+                    context: context
+                )
+                
+                await MainActor.run {
+                    aiSuggestions = response.text
+                    isGeneratingAI = false
+                }
+            } catch {
+                await MainActor.run {
+                    aiSuggestions = "AI suggestions temporarily unavailable. Try again later."
+                    isGeneratingAI = false
+                }
+            }
+        }
+    }
+    
+    private func enhanceWithAI() {
+        guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        
+        isGeneratingAI = true
+        aiSuggestions = ""
+        
+        Task {
+            do {
+                let context = DayContext(
+                    date: suggestedTime,
+                    existingBlocks: [],
+                    currentEnergy: selectedEnergy,
+                    preferredEmojis: [selectedEmoji],
+                    availableTime: TimeInterval(duration * 60),
+                    mood: .crystal
+                )
+                
+                let response = try await aiService.processMessage(
+                    "Enhance this activity with better details: '\(title)'. Suggest improved title, energy level, emoji, and duration. Respond in JSON format with fields: title, energy, emoji, duration.",
+                    context: context
+                )
+                
+                await MainActor.run {
+                    // Parse AI response and populate fields
+                    if let enhancedData = parseEnhancementResponse(response.text) {
+                        title = enhancedData.title
+                        selectedEnergy = enhancedData.energy
+                        selectedEmoji = enhancedData.emoji
+                        duration = enhancedData.duration
+                        aiSuggestions = "✨ Enhanced with AI suggestions!"
+                    } else {
+                        aiSuggestions = response.text
+                    }
+                    isGeneratingAI = false
+                }
+            } catch {
+                await MainActor.run {
+                    aiSuggestions = "AI enhancement temporarily unavailable. Try again later."
+                    isGeneratingAI = false
+                }
+            }
+        }
+    }
+    
+    private func parseEnhancementResponse(_ response: String) -> (title: String, energy: EnergyType, emoji: String, duration: Int)? {
+        // Try to parse JSON response
+        if let jsonData = response.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
+            
+            let title = json["title"] as? String ?? self.title
+            let energyString = json["energy"] as? String ?? selectedEnergy.rawValue
+            let emoji = json["emoji"] as? String ?? selectedEmoji
+            let duration = json["duration"] as? Int ?? self.duration
+            
+            let energy = EnergyType.allCases.first { $0.rawValue == energyString } ?? selectedEnergy
+            
+            return (title: title, energy: energy, emoji: emoji, duration: duration)
+        }
+        
+        // Fallback: try to extract information from text
+        let lines = response.components(separatedBy: .newlines)
+        var enhancedTitle = title
+        var enhancedEnergy = selectedEnergy
+        var enhancedEmoji = selectedEmoji
+        var enhancedDuration = duration
+        
+        for line in lines {
+            let lowercased = line.lowercased()
+            if lowercased.contains("title:") || lowercased.contains("activity:") {
+                if let colonIndex = line.firstIndex(of: ":") {
+                    let afterColon = String(line[line.index(after: colonIndex)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !afterColon.isEmpty {
+                        enhancedTitle = afterColon
+                    }
+                }
+            } else if lowercased.contains("energy:") {
+                if let colonIndex = line.firstIndex(of: ":") {
+                    let afterColon = String(line[line.index(after: colonIndex)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if let energy = EnergyType.allCases.first(where: { $0.rawValue.lowercased() == afterColon.lowercased() }) {
+                        enhancedEnergy = energy
+                    }
+                }
+            } else if lowercased.contains("emoji:") {
+                if let colonIndex = line.firstIndex(of: ":") {
+                    let afterColon = String(line[line.index(after: colonIndex)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !afterColon.isEmpty {
+                        enhancedEmoji = afterColon
+                    }
+                }
+            } else if lowercased.contains("duration:") {
+                if let colonIndex = line.firstIndex(of: ":") {
+                    let afterColon = String(line[line.index(after: colonIndex)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if let durationInt = Int(afterColon.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()) {
+                        enhancedDuration = durationInt
+                    }
+                }
+            }
+        }
+        
+        return (title: enhancedTitle, energy: enhancedEnergy, emoji: enhancedEmoji, duration: enhancedDuration)
     }
 }
 

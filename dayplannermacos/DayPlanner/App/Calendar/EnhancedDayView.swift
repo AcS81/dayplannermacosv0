@@ -28,11 +28,10 @@ struct EnhancedDayView: View {
     @State private var refreshTask: Task<Void, Never>? = nil
     @State private var diagnosticsOverride = false
     
-    // Direct callback for ghost acceptance state changes
-    let onGhostAcceptanceChange: ((GhostAcceptanceInfo?) -> Void)?
+    private let onAcceptanceInfoChange: (GhostAcceptanceInfo?) -> Void
     
-    // Constants for precise timeline sizing
-    private let minuteHeight: CGFloat = 1.0 // 1 pixel per minute = perfect precision
+    // Constants for precise timeline sizing - match timeline canvas (60 pixels per hour)
+    private let minuteHeight: CGFloat = 60.0 / 60.0 // 60 pixels per hour = 1 pixel per minute
     private let dayStartHour: Int = 0
     private let dayEndHour: Int = 24
     private let ghostRefreshInterval: UInt64 = 8_000_000_000 // 8 seconds
@@ -41,12 +40,12 @@ struct EnhancedDayView: View {
         selectedDate: Binding<Date>,
         ghostSuggestions: Binding<[Suggestion]> = .constant([]),
         showingRecommendations: Binding<Bool> = .constant(true),
-        onGhostAcceptanceChange: ((GhostAcceptanceInfo?) -> Void)? = nil
+        onAcceptanceInfoChange: @escaping (GhostAcceptanceInfo?) -> Void = { _ in }
     ) {
         _selectedDate = selectedDate
         _ghostSuggestions = ghostSuggestions
         _showingRecommendations = showingRecommendations
-        self.onGhostAcceptanceChange = onGhostAcceptanceChange
+        self.onAcceptanceInfoChange = onAcceptanceInfoChange
     }
     
     var body: some View {
@@ -95,18 +94,22 @@ struct EnhancedDayView: View {
             if showingRecommendations {
                 startGhostRefresh(force: true)
             }
+            updateAcceptanceInfo()
         }
         .onDisappear {
             stopGhostRefresh()
+            onAcceptanceInfoChange(nil)
         }
         .onChange(of: showingRecommendations) { _, isEnabled in
             if isEnabled {
                 startGhostRefresh(force: true)
+                updateAcceptanceInfo()
             } else {
                 stopGhostRefresh()
                 selectedGhostIDs.removeAll()
                 diagnosticsOverride = false
                 dataManager.diagnosticsGhostOverrideActive = false
+                onAcceptanceInfoChange(nil)
             }
         }
         .onChange(of: dataManager.appState.preferences.autoRefreshRecommendations) { _, newValue in
@@ -117,6 +120,12 @@ struct EnhancedDayView: View {
                     stopGhostRefresh()
                 }
             }
+        }
+        .onChange(of: ghostSuggestions.count) { _, _ in
+            updateAcceptanceInfo()
+        }
+        .onChange(of: selectedGhostIDs) { _, _ in
+            updateAcceptanceInfo()
         }
         .onReceive(NotificationCenter.default.publisher(for: .diagnosticsSpawnGhosts)) { notification in
             guard let count = notification.userInfo?["count"] as? Int, count > 0 else { return }
@@ -177,6 +186,10 @@ struct EnhancedDayView: View {
         )
     }
 
+    private func updateAcceptanceInfo() {
+        onAcceptanceInfoChange(acceptanceInfo)
+    }
+
     private func makeDiagnosticsSuggestions(count: Int) -> [Suggestion] {
         let calendar = Calendar.current
         let dayStart = calendar.startOfDay(for: selectedDate)
@@ -204,8 +217,7 @@ struct EnhancedDayView: View {
             selectedGhostIDs.insert(suggestion.id)
         }
         
-        // Push state changes to calendar panel via direct callback
-        onGhostAcceptanceChange?(acceptanceInfo)
+        updateAcceptanceInfo()
     }
 }
 
@@ -257,6 +269,7 @@ private extension EnhancedDayView {
             }
             let validIDs = Set(placedSuggestions.map(\.id))
             selectedGhostIDs = selectedGhostIDs.intersection(validIDs)
+            updateAcceptanceInfo()
         }
         if let reason { dataManager.consumeMicroUpdate(reason: reason) }
     }
@@ -322,7 +335,7 @@ private extension EnhancedDayView {
         minimumDuration: TimeInterval,
         placed: [Suggestion]
     ) -> (start: Date, duration: TimeInterval)? {
-        var index = 0
+        let index = 0
         while index < gaps.count {
             var gap = gaps[index]
             let adjustedStart = isToday ? max(gap.start, now) : gap.start
@@ -567,8 +580,7 @@ private extension EnhancedDayView {
         }
         selectedGhostIDs.subtract(acceptedIDs)
         
-        // Update calendar panel with new state
-        onGhostAcceptanceChange?(acceptanceInfo)
+        updateAcceptanceInfo()
         
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 2_000_000_000)

@@ -531,7 +531,7 @@ enum GlassMood: String, Codable, CaseIterable {
 // MARK: - AI Models
 
 /// AI suggestion for time blocks
-struct Suggestion: Identifiable, Codable {
+struct Suggestion: Identifiable, Codable, Equatable {
     let id: UUID
     var title: String
     var duration: TimeInterval

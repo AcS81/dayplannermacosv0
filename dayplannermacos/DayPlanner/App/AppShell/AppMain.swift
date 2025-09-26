@@ -152,6 +152,7 @@ struct ContentView: View {
     @State private var selectedDate = Date() // Shared date state across tabs
     @State private var showingSettingsPanel = false
     @State private var showingXPDisplay = false
+    @State private var isHoveringSettings = false
     @State private var showingMindPanel = false // Control mind panel visibility
     
     var body: some View {
@@ -164,20 +165,9 @@ struct ContentView: View {
                     aiConnected: aiService.isConnected,
                     showingMindPanel: $showingMindPanel,
                     hideSettingsButton: showingSettingsPanel,
+                    isHoveringSettings: $isHoveringSettings,
                     onSettingsTap: { 
-                        if showingSettingsPanel {
-                            showingSettings = true
-                        } else {
-                            withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
-                                showingSettingsPanel = true
-                            }
-                            // Show XP display after panel slides in
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                                withAnimation(.easeInOut(duration: 0.8)) {
-                                    showingXPDisplay = true
-                                }
-                            }
-                        }
+                        showingSettings = true
                     },
                     onDiagnosticsTap: { showingAIDiagnostics = true }
                 )
@@ -192,20 +182,13 @@ struct ContentView: View {
                 Spacer()
             }
             
-            // Animated Settings Strip - positioned at top to cover settings button
-            if showingSettingsPanel {
+            // Darker overlay for settings hover - positioned at top to darken the tab section
+            if isHoveringSettings {
                 VStack {
-                    AnimatedSettingsStrip(
+                    HoverSettingsOverlay(
                         xp: dataManager.appState.userXP,
                         xxp: dataManager.appState.userXXP,
-                        isVisible: showingSettingsPanel,
-                        showingXPDisplay: showingXPDisplay,
-                        onClose: {
-                            withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
-                                showingSettingsPanel = false
-                                showingXPDisplay = false
-                            }
-                        },
+                        isVisible: isHoveringSettings,
                         onSettingsTap: {
                             showingSettings = true
                         }
@@ -279,10 +262,9 @@ struct ContentView: View {
                 .environmentObject(aiService)
         }
         .onTapGesture {
-            if showingSettingsPanel {
-                withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
-                    showingSettingsPanel = false
-                    showingXPDisplay = false
+            if isHoveringSettings {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    isHoveringSettings = false
                 }
             }
         }

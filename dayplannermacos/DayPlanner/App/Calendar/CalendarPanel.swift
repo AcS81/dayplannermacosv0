@@ -59,15 +59,7 @@ struct CalendarPanel: View {
                     selectedDate: $selectedDate,
                     ghostSuggestions: $ghostSuggestions,
                     showingRecommendations: $showingRecommendations,
-                    onGhostAcceptanceChange: { info in
-                        if reduceMotion {
-                            ghostAcceptanceInfo = info
-                        } else {
-                            withAnimation(.spring(response: 0.6, dampingFraction: 0.85)) {
-                                ghostAcceptanceInfo = info
-                            }
-                        }
-                    }
+                    onAcceptanceInfoChange: handleGhostAcceptanceInfo
                 )
                     .frame(maxHeight: showingTodoList ? nil : .infinity)
                     .transition(.asymmetric(
@@ -122,6 +114,16 @@ struct CalendarPanel: View {
         .onChange(of: showingMonthView) { _, isMonth in
             if isMonth {
                 ghostAcceptanceInfo = nil
+            }
+        }
+    }
+    
+    private func handleGhostAcceptanceInfo(_ info: GhostAcceptanceInfo?) {
+        if reduceMotion {
+            ghostAcceptanceInfo = info
+        } else {
+            withAnimation(.spring(response: 0.6, dampingFraction: 0.85)) {
+                ghostAcceptanceInfo = info
             }
         }
     }
