@@ -13,16 +13,6 @@ struct GhostAcceptanceInfo: Equatable {
     }
 }
 
-struct GhostAcceptancePreferenceKey: PreferenceKey {
-    static var defaultValue: GhostAcceptanceInfo? = nil
-    static func reduce(value: inout GhostAcceptanceInfo?, nextValue: () -> GhostAcceptanceInfo?) {
-        if let update = nextValue() {
-            value = update
-        } else {
-            value = nil
-        }
-    }
-}
 
 struct EnhancedDayView: View {
     @EnvironmentObject private var dataManager: AppDataManager
@@ -38,6 +28,9 @@ struct EnhancedDayView: View {
     @State private var refreshTask: Task<Void, Never>? = nil
     @State private var diagnosticsOverride = false
     
+    // Direct callback for ghost acceptance state changes
+    let onGhostAcceptanceChange: ((GhostAcceptanceInfo?) -> Void)?
+    
     // Constants for precise timeline sizing
     private let minuteHeight: CGFloat = 1.0 // 1 pixel per minute = perfect precision
     private let dayStartHour: Int = 0
@@ -47,11 +40,13 @@ struct EnhancedDayView: View {
     init(
         selectedDate: Binding<Date>,
         ghostSuggestions: Binding<[Suggestion]> = .constant([]),
-        showingRecommendations: Binding<Bool> = .constant(true)
+        showingRecommendations: Binding<Bool> = .constant(true),
+        onGhostAcceptanceChange: ((GhostAcceptanceInfo?) -> Void)? = nil
     ) {
         _selectedDate = selectedDate
         _ghostSuggestions = ghostSuggestions
         _showingRecommendations = showingRecommendations
+        self.onGhostAcceptanceChange = onGhostAcceptanceChange
     }
     
     var body: some View {
@@ -82,9 +77,7 @@ struct EnhancedDayView: View {
                 )
                 .padding(.trailing, 2)
                 .padding(.bottom, ghostAcceptanceInset)
-                .background(
-                    Color.clear.preference(key: GhostAcceptancePreferenceKey.self, value: acceptanceInfo)
-                )
+                .background(Color.clear)
             }
             .scrollIndicators(.hidden)
             .scrollDisabled(draggedBlock != nil) // Disable scroll when dragging an event
@@ -210,6 +203,9 @@ struct EnhancedDayView: View {
         } else {
             selectedGhostIDs.insert(suggestion.id)
         }
+        
+        // Push state changes to calendar panel via direct callback
+        onGhostAcceptanceChange?(acceptanceInfo)
     }
 }
 
@@ -570,6 +566,10 @@ private extension EnhancedDayView {
             }
         }
         selectedGhostIDs.subtract(acceptedIDs)
+        
+        // Update calendar panel with new state
+        onGhostAcceptanceChange?(acceptanceInfo)
+        
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             await refreshGhosts(force: true, reason: .acceptedSuggestion)

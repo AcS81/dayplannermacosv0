@@ -44,6 +44,11 @@ class PatternLearningEngine: ObservableObject {
         
         // Start pattern analysis timer for UI updates
         startPeriodicAnalysis()
+        
+        // Initialize insights engine integration
+        if let dataManager = dataManager {
+            dataManager.insightsEngine?.patternEngine = self
+        }
     }
     
     // MARK: - Learning Methods

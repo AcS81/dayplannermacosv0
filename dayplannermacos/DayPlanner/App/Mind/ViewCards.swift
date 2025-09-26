@@ -1127,33 +1127,21 @@ struct IntakeSection: View {
     // MARK: - Smart Item Creation
     
     private func createPillarFromAI(_ response: AIResponse) {
-        guard let createdItem = response.createdItems?.first(where: { $0.type == .pillar }),
-              let pillarData = createdItem.data as? [String: Any] else {
+        guard let createdItem = response.createdItems?.first(where: { $0.type == .pillar }) else {
             coreInsight = "Error creating pillar"
             return
         }
         
-        let name = (pillarData["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "New Pillar"
-        let description = (pillarData["description"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "AI-created pillar"
-        let frequency = parseFrequency(pillarData["frequency"] as? String ?? "weekly")
-        let values = extractStringList(from: pillarData["values"]) 
-        let habits = extractStringList(from: pillarData["habits"])
-        let constraints = extractStringList(from: pillarData["constraints"])
-        let quietHours = extractQuietHours(from: pillarData["quietHours"] ?? pillarData["quiet_hours"])
-        let wisdom = (pillarData["wisdom"] as? String)?.nilIfEmpty ?? (pillarData["wisdomText"] as? String)?.nilIfEmpty
-        let emoji = (pillarData["emoji"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "🏛️"
-        let pillar = Pillar(
-            name: name,
-            description: description,
-            frequency: frequency,
-            quietHours: quietHours,
-            wisdomText: wisdom,
-            values: values,
-            habits: habits,
-            constraints: constraints,
-            color: CodableColor(.purple),
-            emoji: emoji
-        )
+        // Use centralized parsing utility for consistent pillar creation
+        let pillar: Pillar
+        if let pillarData = createdItem.data as? [String: Any] {
+            pillar = Pillar.fromAI(pillarData)
+        } else if let pillarObject = createdItem.data as? Pillar {
+            pillar = pillarObject
+        } else {
+            coreInsight = "Error creating pillar"
+            return
+        }
         
         dataManager.addPillar(pillar)
         coreInsight = "✅ Created pillar: \(pillar.name)"

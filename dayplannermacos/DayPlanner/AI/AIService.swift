@@ -732,28 +732,32 @@ class AIService: ObservableObject {
     
     private func processPillarCreation(_ message: String, context: DayContext, analysis: MessageActionAnalysis) async throws -> AIResponse {
         let pillarCreationPrompt = """
-        Create a principle-only pillar from this user request: "\(message)"
+        Create a comprehensive principle pillar from this user request: "\(message)"
 
         Context: \(context.summary)
         Extracted entities: \(analysis.extractedEntities)
         Confidence: \(analysis.confidence)
 
-        Guidelines:
-        - Pillars are guiding principles only. They never auto-book time.
-        - Focus on values, habits, constraints, and quiet hours that steer future suggestions.
-        - Choose cadence that reflects how often the pillar should receive attention.
-        - Provide up to 4 quiet hour windows the AI should protect.
+        ENHANCED GUIDELINES:
+        - Pillars are guiding principles that steer AI decisions and suggestions
+        - Populate ALL metadata fields for maximum usefulness
+        - Values: Core principles this pillar represents (3-5 items)
+        - Habits: Specific behaviors to encourage (3-5 items)
+        - Constraints: Boundaries and guardrails (2-4 items)
+        - Quiet Hours: Time windows to protect (1-3 windows)
+        - Wisdom: Short, memorable principle or mantra
+        - Choose frequency that reflects how often this pillar should guide decisions
 
         Respond in this EXACT JSON format with ALL fields populated:
         {
-            "response": "I'll create a principle pillar for you",
+            "response": "I'll create a comprehensive principle pillar for you",
             "pillar": {
                 "name": "Specific pillar name (max 24 chars)",
-                "description": "Concise summary describing how it guides the user",
+                "description": "Detailed description of how this pillar guides decisions and suggestions",
                 "frequency": "daily|weekly|monthly|as_needed",
-                "values": ["value keywords"],
-                "habits": ["habits to encourage"],
-                "constraints": ["guardrails to respect"],
+                "values": ["Core value 1", "Core value 2", "Core value 3"],
+                "habits": ["Specific habit 1", "Specific habit 2", "Specific habit 3"],
+                "constraints": ["Important boundary 1", "Important boundary 2"],
                 "quietHours": [
                     {
                         "startHour": 6,
@@ -762,13 +766,18 @@ class AIService: ObservableObject {
                         "endMinute": 0
                     }
                 ],
-                "wisdom": "Optional short mantra or principle text",
+                "wisdom": "Short, memorable principle or mantra",
                 "emoji": "🏛️ or meaningful symbol"
             },
             "confidence": \(analysis.confidence)
         }
 
-        Keep arrays tight (<=5 items). Use 24-hour clock for quiet hours. If the user doesn't supply data for a field, infer sensible defaults or return an empty array.
+        REQUIREMENTS:
+        - Fill ALL fields with meaningful content
+        - Use 24-hour clock for quiet hours
+        - Keep arrays focused (3-5 items each)
+        - Make wisdom text memorable and actionable
+        - Ensure description explains how this guides AI decisions
         """
         
         let response = try await generateCompletion(prompt: pillarCreationPrompt)
@@ -1305,22 +1314,13 @@ class AIService: ObservableObject {
                 throw AIError.invalidResponse
             }
             
-            // Enhance pillar data with proper defaults
-            var enhancedPillarData = pillarData
+            // Use centralized parsing utility for consistent pillar creation
+            let pillar = Pillar.fromAI(pillarData)
             
-            // Ensure all required fields are present with smart defaults
-            if enhancedPillarData["name"] == nil { enhancedPillarData["name"] = "New Pillar" }
-            if enhancedPillarData["description"] == nil { enhancedPillarData["description"] = "AI-created pillar" }
-            enhancedPillarData["type"] = "principle"
-            if enhancedPillarData["frequency"] == nil { enhancedPillarData["frequency"] = "weekly" }
-            if enhancedPillarData["values"] == nil { enhancedPillarData["values"] = [] }
-            if enhancedPillarData["habits"] == nil { enhancedPillarData["habits"] = [] }
-            if enhancedPillarData["constraints"] == nil { enhancedPillarData["constraints"] = [] }
-            if enhancedPillarData["quietHours"] == nil { enhancedPillarData["quietHours"] = [] }
-            if enhancedPillarData["wisdom"] == nil { enhancedPillarData["wisdom"] = NSNull() }
-            if enhancedPillarData["emoji"] == nil { enhancedPillarData["emoji"] = "🏛️" }
-            if enhancedPillarData["preferredTimeWindows"] == nil { enhancedPillarData["preferredTimeWindows"] = [] }
-
+            // Validate the pillar and enhance if needed
+            let validation = pillar.validate()
+            let finalPillar = validation.needsEnhancement ? pillar.enhance() : pillar
+            
             return AIResponse(
                 text: response,
                 suggestions: [],
@@ -1329,28 +1329,28 @@ class AIService: ObservableObject {
                     CreatedItem(
                         type: .pillar,
                         id: UUID(),
-                        title: enhancedPillarData["name"] as? String ?? "New Pillar",
-                        data: enhancedPillarData
+                        title: finalPillar.name,
+                        data: finalPillar
                     )
                 ],
                 confidence: analysis.confidence
             )
             
         } catch {
-            // Fallback with basic pillar structure
+            // Fallback with basic pillar structure using centralized utility
             let fallbackPillarData: [String: Any] = [
                 "name": "New Pillar",
                 "description": "AI-created pillar",
-                "type": "principle",
                 "frequency": "weekly",
                 "values": [],
                 "habits": [],
                 "constraints": [],
                 "quietHours": [],
                 "wisdom": NSNull(),
-                "emoji": "🏛️",
-                "preferredTimeWindows": []
+                "emoji": "🏛️"
             ]
+            
+            let fallbackPillar = Pillar.fromAI(fallbackPillarData)
             
             return AIResponse(
                 text: "I'll help you create that pillar",
@@ -1360,8 +1360,8 @@ class AIService: ObservableObject {
                     CreatedItem(
                         type: .pillar,
                         id: UUID(),
-                        title: "New Pillar",
-                        data: fallbackPillarData
+                        title: fallbackPillar.name,
+                        data: fallbackPillar
                     )
                 ],
                 confidence: analysis.confidence

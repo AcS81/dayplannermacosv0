@@ -55,7 +55,7 @@ private struct GhostEventCard: View {
     
     private var eventHeight: CGFloat {
         let computed = CGFloat(suggestion.duration / 60) * minuteHeight
-        return max(computed, 44)
+        return max(computed, 60) // Increased minimum for better usability
     }
     
     private var checkboxSymbol: String {

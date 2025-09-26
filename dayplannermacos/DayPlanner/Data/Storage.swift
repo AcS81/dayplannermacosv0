@@ -92,6 +92,7 @@ class AppDataManager: ObservableObject {
     // Intelligence and analysis
     @Published var vibeAnalyzer = VibeAnalyzer()
     @Published var patternEngine = PatternLearningEngine()
+    @Published var insightsEngine: ActionableInsightsEngine?
     weak var onboardingDelegate: OnboardingProgressDelegate?
     @Published private(set) var todaysMoodEntry: MoodEntry?
     @Published var needsMoodPrompt = true
@@ -134,6 +135,7 @@ class AppDataManager: ObservableObject {
     
     init() {
         patternEngine = PatternLearningEngine(dataManager: self)
+        insightsEngine = ActionableInsightsEngine(dataManager: self, patternEngine: patternEngine)
         load()
         
         // Auto-save every 5 minutes
@@ -400,6 +402,9 @@ class AppDataManager: ObservableObject {
         if block.origin != .external {
             onboardingDelegate?.onboardingDidCreateBlock(block, acceptedSuggestion: block.origin == .suggestion)
         }
+        
+        // Trigger insight refresh
+        // insightsEngine?.checkForUpdates()
     }
     
     func updateTimeBlock(_ block: TimeBlock) {
@@ -409,6 +414,9 @@ class AppDataManager: ObservableObject {
         refreshPastBlocks()
         requestMicroUpdate(.editedBlock)
         save()
+        
+        // Trigger insight refresh
+        // insightsEngine?.checkForUpdates()
     }
     
     func removeTimeBlock(_ blockId: UUID) {
@@ -416,6 +424,9 @@ class AppDataManager: ObservableObject {
             appState.removeBlock(blockId)
         }
         save()
+        
+        // Trigger insight refresh
+        // insightsEngine?.checkForUpdates()
     }
     
     func moveTimeBlock(_ block: TimeBlock, to newStartTime: Date) {
@@ -769,6 +780,9 @@ class AppDataManager: ObservableObject {
         appState.addXP(15, reason: "Created pillar: \(normalized.name)")
         
         onboardingDelegate?.onboardingDidCreatePillar(normalized)
+        
+        // Trigger insight refresh
+        // insightsEngine?.checkForUpdates()
     }
     
     func updatePillar(_ pillar: Pillar) {
@@ -782,6 +796,9 @@ class AppDataManager: ObservableObject {
                 propagateEmojiFromPillar(normalized)
             }
             save()
+            
+            // Trigger insight refresh
+            insightsEngine?.checkForUpdates()
         }
     }
     
@@ -790,6 +807,9 @@ class AppDataManager: ObservableObject {
         appState.emphasizedPillarIds.remove(pillarId)
         appState.pillarFeedbackStats.removeValue(forKey: pillarId)
         save()
+        
+        // Trigger insight refresh
+        // insightsEngine?.checkForUpdates()
     }
 
     func makeMindEditorContext() -> MindEditorContext {
@@ -1614,6 +1634,9 @@ class AppDataManager: ObservableObject {
         }
         save()
         onboardingDelegate?.onboardingDidCreateGoal(enrichedGoal)
+        
+        // Trigger insight refresh
+        // insightsEngine?.checkForUpdates()
     }
     
     func updateGoal(_ goal: Goal) {
@@ -1634,6 +1657,9 @@ class AppDataManager: ObservableObject {
             }
         }
         save()
+        
+        // Trigger insight refresh
+        // insightsEngine?.checkForUpdates()
     }
     
     func removeGoal(id: UUID) {
@@ -1641,6 +1667,9 @@ class AppDataManager: ObservableObject {
         appState.pinnedGoalIds.remove(id)
         appState.goalFeedbackStats.removeValue(forKey: id)
         save()
+        
+        // Trigger insight refresh
+        // insightsEngine?.checkForUpdates()
     }
     
     func toggleTaskCompletion(goalId: UUID, taskId: UUID) {

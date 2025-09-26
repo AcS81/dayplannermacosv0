@@ -472,32 +472,36 @@ struct ActionBarView: View {
     private func handlePillarCreation(_ response: AIResponse, message: String) {
         if response.confidence >= 0.85 { // Lowered threshold slightly
             // High confidence - create the pillar directly with full details
-            if let createdItem = response.createdItems?.first(where: { $0.type == .pillar }),
-               let pillarData = createdItem.data as? [String: Any] {
+            if let createdItem = response.createdItems?.first(where: { $0.type == .pillar }) {
                 
-                // Create fully populated pillar with simplified fallbacks
-                    let pillar = Pillar(
-                    name: pillarData["name"] as? String ?? "New Pillar",
-                    description: pillarData["description"] as? String ?? "AI-created pillar based on your request",
-                    type: PillarType(rawValue: pillarData["type"] as? String ?? "actionable") ?? .actionable,
-                    frequency: PillarFrequency.daily,
-                    minDuration: TimeInterval((pillarData["minDuration"] as? Int ?? 30) * 60),
-                    maxDuration: TimeInterval((pillarData["maxDuration"] as? Int ?? 120) * 60),
-                    preferredTimeWindows: [],
-                    overlapRules: [],
-                    quietHours: [],
-                    eventConsiderationEnabled: true,
-                    wisdomText: pillarData["wisdomText"] as? String,
-                    emoji: pillarData["emoji"] as? String ?? "🏛️",
-                    relatedGoalId: nil
-                )
+                // Use centralized parsing utility for consistent pillar creation
+                let pillar: Pillar
+                if let pillarData = createdItem.data as? [String: Any] {
+                    pillar = Pillar.fromAI(pillarData)
+                    pillar = Pillar(
+                        name: pillarData["name"] as? String ?? "New Pillar",
+                        description: pillarData["description"] as? String ?? "AI-created pillar",
+                        frequency: .weekly(1),
+                        quietHours: [],
+                        wisdomText: pillarData["wisdom"] as? String,
+                        values: pillarData["values"] as? [String] ?? [],
+                        habits: pillarData["habits"] as? [String] ?? [],
+                        constraints: pillarData["constraints"] as? [String] ?? [],
+                        color: CodableColor(.purple),
+                        emoji: pillarData["emoji"] as? String ?? "🏛️"
+                    )
+                } else if let pillarObject = createdItem.data as? Pillar {
+                    pillar = pillarObject
+                } else {
+                    return
+                }
                 
-                    dataManager.addPillar(pillar)
+                dataManager.addPillar(pillar)
                 
                 // Award XP for pillar creation
                 dataManager.appState.addXP(20, reason: "AI created pillar")
                 
-                showEphemeralInsight("🏛️ Created \(pillar.type.rawValue.lowercased()) pillar: \(pillar.name)")
+                showEphemeralInsight("🏛️ Created principle pillar: \(pillar.name)")
                 
                 // Suggest scheduling if it's actionable
                 if pillar.isActionable {
