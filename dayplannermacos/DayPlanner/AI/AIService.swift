@@ -162,7 +162,12 @@ class AIService: ObservableObject {
     private var openAIModel: String = "gpt-4o-mini"
     private var localModel: String = "openai/gpt-oss-20b"
     private let session: URLSession
-    
+    private let iso8601Formatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
     // Smart confidence thresholds for different actions
     private let confidenceThresholds = AIConfidenceThresholds()
     
@@ -628,10 +633,13 @@ class AIService: ObservableObject {
     }
 
     private func processEventCreation(_ message: String, context: DayContext, analysis: MessageActionAnalysis) async throws -> AIResponse {
+        let timelineDetails = timelineSummary(for: context)
         let eventCreationPrompt = """
         Create a specific time block/event from this user request: "\(message)"
-        
+
         Context: \(context.summary)
+        Timeline snapshot:
+        \(timelineDetails)
         Extracted entities: \(analysis.extractedEntities)
         Confidence: \(analysis.confidence)
         
@@ -852,13 +860,23 @@ class AIService: ObservableObject {
     }
     
     private func processGeneralChat(_ message: String, context: DayContext, analysis: MessageActionAnalysis) async throws -> AIResponse {
+        let timelineDetails = timelineSummary(for: context)
         let generalChatPrompt = """
-        Respond to this user message in a helpful, encouraging way: "\(message)"
-        
-        Context: \(context.summary)
-        
-        Provide a thoughtful response and suggest 1-2 activities if appropriate, but keep confidence low since this is general chat.
-        
+        You are DayPlanner's friendly calendar companion. Respond to this user message: "\(message)"
+
+        Context summary:
+        \(context.summary)
+
+        Timeline snapshot:
+        \(timelineDetails)
+
+        Guidelines:
+        - Speak in warm, natural sentences without markdown around the JSON values.
+        - Reference relevant confirmed or upcoming activities when it helps the user feel understood.
+        - When the user shares new plans or personal details, restate them succinctly in the `response` so they can be remembered.
+        - Offer at most one or two light suggestions only when they support the conversation and keep their confidence modest.
+        - Keep your tone grounded and helpful—avoid silly jokes or whimsical language.
+
         Respond in this exact JSON format:
         {
             "response": "Your helpful response",
@@ -882,13 +900,70 @@ class AIService: ObservableObject {
     
     // MARK: - Private Methods
     
+    private func timelineSummary(for context: DayContext) -> String {
+        guard !context.existingBlocks.isEmpty else {
+            return "No scheduled activities yet."
+        }
+
+        let sorted = context.existingBlocks.sorted { $0.startTime < $1.startTime }
+        let now = Date()
+
+        let recent = sorted.filter { $0.endTime <= now }.suffix(4)
+        let upcoming = sorted.filter { $0.startTime > now }.prefix(4)
+
+        var lines: [String] = []
+
+        if !recent.isEmpty {
+            lines.append("Recent confirmations:")
+            for block in recent {
+                var line = "- \(block.startTime.timeString) \(block.displayEmoji) \(block.title)"
+                if let note = block.notes?.split(separator: "\n").first {
+                    let snippet = note.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !snippet.isEmpty {
+                        let clipped = snippet.count > 80 ? String(snippet.prefix(77)) + "…" : String(snippet)
+                        line += " • \(clipped)"
+                    }
+                }
+                lines.append(line)
+            }
+        }
+
+        if !upcoming.isEmpty {
+            lines.append("Upcoming:")
+            for block in upcoming {
+                let line = "- \(block.startTime.timeString) \(block.displayEmoji) \(block.title)"
+                lines.append(line)
+            }
+        }
+
+        if lines.isEmpty {
+            if let current = sorted.first(where: { $0.startTime <= now && $0.endTime >= now }) {
+                return "In progress: \(current.startTime.timeString) \(current.emoji) \(current.title)"
+            }
+            return "No scheduled activities yet."
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    private func parseSuggestedDate(from isoString: String?) -> Date {
+        guard let isoString else { return Date() }
+        if let parsed = iso8601Formatter.date(from: isoString) {
+            return parsed
+        }
+        let fallbackFormatter = ISO8601DateFormatter()
+        fallbackFormatter.formatOptions = [.withInternetDateTime]
+        return fallbackFormatter.date(from: isoString) ?? Date()
+    }
+
     private func buildPrompt(message: String, context: DayContext) -> String {
-        let pillarGuidanceText = context.pillarGuidance.isEmpty ? 
+        let pillarGuidanceText = context.pillarGuidance.isEmpty ?
             "" : "\n\nUser's Core Principles (guide all suggestions):\n\(context.pillarGuidance.joined(separator: "\n"))"
-        
+        let timelineDetails = timelineSummary(for: context)
+
         return """
         You are a helpful day planning assistant. The user is planning their day and needs suggestions.
-        
+
         Current context:
         - Planning date: \(context.date.formatted(.dateTime.weekday().month().day().year()))
         - Current time: \(context.currentTime.formatted(.dateTime.hour().minute()))
@@ -897,7 +972,9 @@ class AIService: ObservableObject {
         - Available time: \(Int(context.availableTime/3600)) hours
         - Mood: \(context.mood.description)
         \(context.weatherContext != nil ? "- Weather: \(context.weatherContext!)" : "")\(pillarGuidanceText)
-        
+        Timeline snapshot:
+        \(timelineDetails)
+
         User message: "\(message)"
         
         IMPORTANT: Always align suggestions with the user's core principles listed above. Consider:
@@ -1212,10 +1289,13 @@ class AIService: ObservableObject {
                 return UUID(uuidString: rawString)
             }
             let explanation = eventData["explanation"] as? String ?? "AI-generated activity"
+            let startTimeString = eventData["startTime"] as? String
+            let suggestedDate = parseSuggestedDate(from: startTimeString)
+
             let suggestion = Suggestion(
                 title: eventData["title"] as? String ?? "New Activity",
                 duration: TimeInterval((eventData["duration"] as? Int ?? 1800)),
-                suggestedTime: Date(),
+                suggestedTime: suggestedDate,
                 energy: EnergyType(rawValue: eventData["energy"] as? String ?? "daylight") ?? .daylight,
                 emoji: eventData["emoji"] as? String ?? "📋",
                 explanation: explanation,
@@ -1226,7 +1306,8 @@ class AIService: ObservableObject {
                 relatedPillarId: uuid(from: eventData["relatedPillarId"]),
                 relatedPillarTitle: eventData["relatedPillarTitle"] as? String,
                 reason: eventData["reason"] as? String ?? explanation,
-                linkHints: eventData["linkHints"] as? [String]
+                linkHints: eventData["linkHints"] as? [String],
+                rawSuggestedTime: startTimeString
             )
             
             return AIResponse(
@@ -1462,12 +1543,13 @@ class AIService: ObservableObject {
     }
     
     private func buildEnhancedSuggestionPrompt(message: String, context: DayContext, analysis: MessageActionAnalysis) -> String {
-        let pillarGuidanceText = context.pillarGuidance.isEmpty ? 
+        let pillarGuidanceText = context.pillarGuidance.isEmpty ?
             "" : "\n\nUser's Core Principles (guide all suggestions):\n\(context.pillarGuidance.joined(separator: "\n"))"
-        
+        let timelineDetails = timelineSummary(for: context)
+
         return """
         You are a helpful day planning assistant. The user is asking for suggestions: "\(message)"
-        
+
         Current context:
         - Planning date: \(context.date.formatted(.dateTime.weekday().month().day().year()))
         - Current time: \(context.currentTime.formatted(.dateTime.hour().minute()))
@@ -1478,7 +1560,9 @@ class AIService: ObservableObject {
         - Intent confidence: \(analysis.confidence)
         - Context alignment: \(analysis.contextAlignment)
         \(context.weatherContext != nil ? "- Weather: \(context.weatherContext!)" : "")\(pillarGuidanceText)
-        
+        Timeline snapshot:
+        \(timelineDetails)
+
         IMPORTANT: Always align suggestions with the user's core principles listed above. Consider:
         - Weather conditions for indoor/outdoor activities
         - User's guiding principles when making any suggestion

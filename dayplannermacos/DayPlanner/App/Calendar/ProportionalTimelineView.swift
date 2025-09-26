@@ -416,20 +416,20 @@ struct PreciseEventCard: View {
                 VStack(spacing: 1) {
                     Text(block.energy.rawValue)
                         .font(.caption)
-                    Text(block.emoji)
+                    Text(block.displayEmoji)
                         .font(.caption2)
                 }
                 .opacity(0.8)
                 .frame(width: 25)
-                
+
                 // Block content
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
-                        if !block.emoji.isEmpty {
-                            Text(block.emoji)
+                        if !block.displayEmoji.isEmpty {
+                            Text(block.displayEmoji)
                                 .font(.caption)
                         }
-                        
+
                         Text(block.title)
                             .font(.subheadline)
                             .fontWeight(.medium)
@@ -520,14 +520,6 @@ struct PreciseEventCard: View {
                 gapEdgeButton(for: .trailing)
                     .offset(x: 18, y: edgeButtonVerticalOffset)
                     .transition(.scale.combined(with: .opacity))
-            }
-        }
-        .overlay(alignment: .topTrailing) {
-            if block.confirmationState == .confirmed {
-                Image(systemName: "checkmark.seal.fill")
-                    .font(.caption2)
-                    .foregroundStyle(.green)
-                    .padding(6)
             }
         }
         .onHover { hovering in

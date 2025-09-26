@@ -29,11 +29,11 @@ struct FixedPositionEventCard: View {
                 showingDetails = true // No animation to prevent flashing
             }) {
                 HStack(spacing: 8) {
-                    // Energy and flow indicators  
+                    // Energy and flow indicators
                     VStack(spacing: 2) {
                         Text(block.energy.rawValue)
                             .font(.caption)
-                        Text(block.emoji)
+                        Text(block.displayEmoji)
                             .font(.caption)
                     }
                     .opacity(0.8)
@@ -793,7 +793,7 @@ struct CleanEventCard: View {
                 VStack(spacing: 1) {
                     Text(block.energy.rawValue)
                         .font(.caption)
-                    Text(block.emoji)
+                    Text(block.displayEmoji)
                         .font(.caption2)
                 }
                 .opacity(0.8)
@@ -1018,7 +1018,7 @@ struct EnhancedTimeBlockCard: View {
                 VStack(spacing: 2) {
                     Text(block.energy.rawValue)
                         .font(.title3)
-                    Text(block.emoji)
+                    Text(block.displayEmoji)
                         .font(.caption)
                 }
                 .opacity(0.8)
