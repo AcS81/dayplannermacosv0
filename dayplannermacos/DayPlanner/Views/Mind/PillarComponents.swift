@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import Foundation
 
 struct CrystalPillarsSection: View {
     @EnvironmentObject private var dataManager: AppDataManager
@@ -312,6 +313,11 @@ struct ComprehensivePillarCreatorSheet: View {
     @State private var relatedGoalId: UUID?
     @State private var isGeneratingAI = false
     @State private var aiSuggestions = ""
+    @State private var generatedValues: [String] = []
+    @State private var generatedHabits: [String] = []
+    @State private var generatedConstraints: [String] = []
+    @State private var generatedQuietHours: [TimeWindow] = []
+    @State private var isAutoUpdatingMode = false
     
     var body: some View {
         NavigationView {
@@ -342,7 +348,11 @@ struct ComprehensivePillarCreatorSheet: View {
                         VStack(alignment: .leading, spacing: 8) {
                             Toggle("Principle only (guides AI, doesn't create events)", isOn: $isPrincipleOnly)
                                         .font(.subheadline)
-                            
+                                        .onChange(of: isPrincipleOnly) { _ in
+                                            guard !isAutoUpdatingMode else { return }
+                                            generateAISuggestions()
+                                        }
+
                             if isPrincipleOnly {
                                 TextField("Core wisdom/principle", text: $wisdomText, axis: .vertical)
                                     .textFieldStyle(.roundedBorder)
@@ -411,12 +421,20 @@ struct ComprehensivePillarCreatorSheet: View {
                     }
                     
                     // AI suggestions
-                    if !aiSuggestions.isEmpty {
+                    if isGeneratingAI {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Drafting pillar blueprint…")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if !aiSuggestions.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("AI Suggestions")
                                 .font(.headline)
                                 .fontWeight(.medium)
-                            
+
                             Text(aiSuggestions)
                                 .font(.body)
                                 .foregroundStyle(.secondary)
@@ -448,34 +466,40 @@ struct ComprehensivePillarCreatorSheet: View {
     }
     
     private func generateAISuggestions() {
-        guard !pillarName.isEmpty else { return }
-        
+        let trimmedName = pillarName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
+
         isGeneratingAI = true
-        
+
         Task {
-            let prompt = """
-            User creating pillar: "\(pillarName)"
-            
-            Suggest optimal:
-            - Description (1 sentence)
-            - Frequency (daily/weekly/etc)
-            - Duration range
-            - Whether this should be principle-only or actionable
-            
-            Brief response.
-            """
-            
+            let context = dataManager.makeMindEditorContext()
+            var message = "Create a \(isPrincipleOnly ? "principle" : "actionable") pillar named \"\(trimmedName)\"."
+            let cleanedDescription = pillarDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !cleanedDescription.isEmpty {
+                message += " The focus is: \(cleanedDescription)."
+            }
+            message += " Provide description, cadence, values, habits, constraints, quiet hours, emoji, and guiding wisdom in your commands."
+
             do {
-                let context = dataManager.createEnhancedContext()
-                let response = try await aiService.processMessage(prompt, context: context)
-                
-                await MainActor.run {
-                    aiSuggestions = response.text
-                    isGeneratingAI = false
+                let response = try await aiService.processMindCommands(message: message, context: context)
+                if let createCommand = response.commands.compactMap({ command -> MindCommandCreatePillar? in
+                    if case .createPillar(let payload) = command { return payload }
+                    return nil
+                }).first {
+                    await MainActor.run {
+                        applyBlueprint(createCommand, summary: response.summary)
+                        isGeneratingAI = false
+                    }
+                } else {
+                    await MainActor.run {
+                        let summaryText = response.summary?.trimmingCharacters(in: .whitespacesAndNewlines)
+                        aiSuggestions = (summaryText?.isEmpty == false ? summaryText! : "Could not draft a blueprint.")
+                        isGeneratingAI = false
+                    }
                 }
             } catch {
                 await MainActor.run {
-                    aiSuggestions = "This looks like a good pillar. Consider if it should create events or just guide decisions."
+                    aiSuggestions = "AI unavailable—set details manually for now."
                     isGeneratingAI = false
                 }
             }
@@ -483,58 +507,161 @@ struct ComprehensivePillarCreatorSheet: View {
     }
     
     private func createPillarWithAI() {
-        Task {
-            // First create basic pillar
-            let newPillar = Pillar(
-            name: pillarName,
-                description: pillarDescription.isEmpty ? "AI will enhance this" : pillarDescription,
-                type: isPrincipleOnly ? .principle : .actionable,
+        let trimmedName = pillarName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
+
+        let cleanedDescription = pillarDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanedWisdom = wisdomText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let pillar = Pillar(
+            name: trimmedName,
+            description: cleanedDescription.isEmpty ? "AI-generated pillar" : cleanedDescription,
+            type: isPrincipleOnly ? .principle : .actionable,
             frequency: selectedFrequency,
-                minDuration: isPrincipleOnly ? 0 : TimeInterval(minDuration * 60),
-                maxDuration: isPrincipleOnly ? 0 : TimeInterval(maxDuration * 60),
-                eventConsiderationEnabled: true,
-                wisdomText: isPrincipleOnly ? wisdomText : nil,
-                color: CodableColor(selectedColor),
-                emoji: selectedEmoji,
-                relatedGoalId: relatedGoalId
-            )
-        
-            // Then enhance with AI
-            do {
-                let enhancedPillar = try await enhancePillarWithAI(newPillar)
-                
-                await MainActor.run {
-                    onPillarCreated(enhancedPillar)
-                }
-            } catch {
-                await MainActor.run {
-        onPillarCreated(newPillar)
-                }
+            minDuration: isPrincipleOnly ? 0 : TimeInterval(minDuration * 60),
+            maxDuration: isPrincipleOnly ? 0 : TimeInterval(maxDuration * 60),
+            quietHours: generatedQuietHours,
+            wisdomText: cleanedWisdom.isEmpty ? nil : cleanedWisdom,
+            values: generatedValues,
+            habits: generatedHabits,
+            constraints: generatedConstraints,
+            color: CodableColor(selectedColor),
+            emoji: selectedEmoji,
+            relatedGoalId: relatedGoalId
+        )
+
+        onPillarCreated(pillar)
+        dismiss()
+    }
+
+    @MainActor
+    private func applyBlueprint(_ payload: MindCommandCreatePillar, summary: String?) {
+        let sanitizedValues = sanitizeList(payload.values)
+        let sanitizedHabits = sanitizeList(payload.habits)
+        let sanitizedConstraints = sanitizeList(payload.constraints)
+        generatedValues = sanitizedValues
+        generatedHabits = sanitizedHabits
+        generatedConstraints = sanitizedConstraints
+        generatedQuietHours = convertQuietHours(payload.quietHours)
+
+        if let description = payload.description?.trimmingCharacters(in: .whitespacesAndNewlines), !description.isEmpty {
+            pillarDescription = description
+        }
+        if let emoji = payload.emoji?.trimmingCharacters(in: .whitespacesAndNewlines), !emoji.isEmpty {
+            selectedEmoji = emoji
+        }
+
+        let resolvedFrequency = parseFrequency(payload.frequency)
+        selectedFrequency = resolvedFrequency
+
+        let trimmedWisdom = payload.wisdom?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let suggestedPrinciple = shouldTreatAsPrinciple(payload: payload, habits: sanitizedHabits, constraints: sanitizedConstraints)
+        if suggestedPrinciple != isPrincipleOnly {
+            isAutoUpdatingMode = true
+            isPrincipleOnly = suggestedPrinciple
+            isAutoUpdatingMode = false
+        }
+        if !trimmedWisdom.isEmpty {
+            wisdomText = trimmedWisdom
+        }
+
+        let summaryLines: [String] = buildSummaryLines(summary: summary,
+                                                       frequency: resolvedFrequency,
+                                                       values: sanitizedValues,
+                                                       habits: sanitizedHabits,
+                                                       constraints: sanitizedConstraints,
+                                                       quietHours: generatedQuietHours,
+                                                       wisdom: trimmedWisdom)
+        aiSuggestions = summaryLines.joined(separator: "\n")
+    }
+
+    private func sanitizeList(_ items: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for raw in items {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let key = trimmed.lowercased()
+            if !seen.contains(key) {
+                seen.insert(key)
+                result.append(trimmed)
             }
         }
+        return result
     }
-    
-    private func enhancePillarWithAI(_ pillar: Pillar) async throws -> Pillar {
-        let context = dataManager.createEnhancedContext()
-        let prompt = """
-        Enhance this pillar based on user patterns:
-        Name: \(pillar.name)
-        Type: \(pillar.type.rawValue)
-        
-        User context: \(context.summary)
-        
-        Provide enhanced description and if principle, core wisdom text.
-        """
-        
-        let response = try await aiService.processMessage(prompt, context: context)
-        
-        var enhanced = pillar
-        enhanced.description = response.text
-        if pillar.isPrinciple && enhanced.wisdomText?.isEmpty != false {
-            enhanced.wisdomText = "Live by: \(response.text)"
+
+    private func parseFrequency(_ text: String?) -> PillarFrequency {
+        guard let rawText = text?.lowercased(), !rawText.isEmpty else {
+            return selectedFrequency
         }
-        
-        return enhanced
+        if rawText.contains("as") && rawText.contains("need") { return .asNeeded }
+        if rawText.contains("daily") { return .daily }
+        if rawText.contains("month") {
+            let count = extractFirstInteger(from: rawText) ?? 1
+            return .monthly(max(1, count))
+        }
+        if rawText.contains("week") {
+            let count = extractFirstInteger(from: rawText) ?? 1
+            return .weekly(max(1, count))
+        }
+        return selectedFrequency
+    }
+
+    private func extractFirstInteger(from text: String) -> Int? {
+        let scanner = Scanner(string: text)
+        return scanner.scanInt()
+    }
+
+    private func convertQuietHours(_ descriptors: [MindQuietHourDescriptor]) -> [TimeWindow] {
+        descriptors.compactMap { descriptor in
+            guard let start = parseTime(descriptor.start), let end = parseTime(descriptor.end), end.totalMinutes > start.totalMinutes else { return nil }
+            return TimeWindow(startHour: start.hour, startMinute: start.minute, endHour: end.hour, endMinute: end.minute)
+        }
+    }
+
+    private func parseTime(_ text: String) -> (hour: Int, minute: Int, totalMinutes: Int)? {
+        let components = text.split(separator: ":")
+        guard components.count == 2,
+              let hour = Int(components[0]),
+              let minute = Int(components[1]),
+              (0...23).contains(hour),
+              (0...59).contains(minute) else { return nil }
+        return (hour, minute, hour * 60 + minute)
+    }
+
+    private func shouldTreatAsPrinciple(payload: MindCommandCreatePillar, habits: [String], constraints: [String]) -> Bool {
+        if isPrincipleOnly { return true }
+        if !habits.isEmpty || !constraints.isEmpty { return false }
+        if let frequencyText = payload.frequency?.lowercased(), frequencyText.contains("as") && frequencyText.contains("need") {
+            return true
+        }
+        let wisdom = payload.wisdom?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !wisdom.isEmpty
+    }
+
+    private func buildSummaryLines(summary: String?, frequency: PillarFrequency, values: [String], habits: [String], constraints: [String], quietHours: [TimeWindow], wisdom: String) -> [String] {
+        var lines: [String] = []
+        if let summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            lines.append(summary.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        lines.append("Cadence: \(frequency.displayName)")
+        if !values.isEmpty {
+            lines.append("Values: \(values.joined(separator: ", "))")
+        }
+        if !habits.isEmpty {
+            lines.append("Habits to encourage: \(habits.joined(separator: ", "))")
+        }
+        if !constraints.isEmpty {
+            lines.append("Constraints: \(constraints.joined(separator: ", "))")
+        }
+        if !quietHours.isEmpty {
+            let windows = quietHours.map { $0.description }.joined(separator: ", ")
+            lines.append("Quiet hours: \(windows)")
+        }
+        if !wisdom.isEmpty {
+            lines.append("Wisdom: \(wisdom)")
+        }
+        return lines
     }
 }
 

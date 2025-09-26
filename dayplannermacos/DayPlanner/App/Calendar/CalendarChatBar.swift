@@ -10,6 +10,7 @@ struct CalendarChatBar: View {
     @State private var undoCandidate: Record?
     @State private var showConnectionAlert = false
     @State private var lastErrorMessage: String?
+    @State private var lastAssistantStatus: String?
     @FocusState private var isFocused: Bool
     
     private var currentPrompt: String {
@@ -51,7 +52,13 @@ struct CalendarChatBar: View {
                     }
                 }
             }
-            
+
+            if let status = lastAssistantStatus?.trimmingCharacters(in: .whitespacesAndNewlines), !status.isEmpty {
+                Text(status)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             if let record = undoCandidate {
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.uturn.backward.circle")
@@ -193,14 +200,18 @@ struct CalendarChatBar: View {
     
     private func sendPlanningMessage(_ message: String) {
         isSending = true
+        lastAssistantStatus = nil
         Task {
             let context = dataManager.createEnhancedContext(date: dataManager.appState.currentDay.date)
             do {
-                _ = try await aiService.getSuggestions(for: message, context: context)
+                let response = try await aiService.processMessage(message, context: context)
+                await MainActor.run {
+                    lastErrorMessage = nil
+                    handleAIResponse(response, originalMessage: message)
+                }
             } catch {
                 await MainActor.run {
                     print("❌ Chat error: \(error.localizedDescription)")
-                    // Show user feedback for connection issues
                     if let aiError = error as? AIError, aiError == .notConnected {
                         lastErrorMessage = "AI service is not connected. Please check your API configuration in Settings."
                         showConnectionAlert = true
@@ -209,6 +220,7 @@ struct CalendarChatBar: View {
                         lastErrorMessage = "Failed to process request: \(error.localizedDescription)"
                         showConnectionAlert = true
                     }
+                    lastAssistantStatus = "Couldn't process that right now."
                 }
             }
             await MainActor.run {
@@ -244,6 +256,132 @@ struct CalendarChatBar: View {
         dataManager.undoRecord(record.id)
         undoCandidate = nil
         refreshPrompt()
+    }
+
+    @MainActor
+    private func handleAIResponse(_ response: AIResponse, originalMessage: String) {
+        var statusText = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let actionType = response.actionType {
+            switch actionType {
+            case .createEvent:
+                if let message = handleEventCreation(response) {
+                    statusText = message
+                }
+            case .createGoal, .createPillar, .createChain:
+                if statusText.isEmpty {
+                    statusText = "Captured your request."
+                }
+                dataManager.requestMicroUpdate(.pinChange)
+            case .suggestActivities:
+                if statusText.isEmpty {
+                    statusText = "Sharing fresh ideas."
+                }
+                dataManager.requestMicroUpdate(.feedback)
+            case .generalChat:
+                break
+            }
+        }
+
+        if statusText.isEmpty {
+            statusText = "Noted."
+        }
+
+        lastAssistantStatus = statusText
+    }
+
+    @MainActor
+    private func handleEventCreation(_ response: AIResponse) -> String? {
+        guard var suggestion = response.suggestions.first else {
+            return response.text.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        }
+
+        if suggestion.relatedGoalId == nil, let goal = findRelatedGoal(for: suggestion.title) {
+            suggestion.relatedGoalId = goal.id
+            suggestion.relatedGoalTitle = goal.title
+        }
+        if suggestion.relatedPillarId == nil, let pillar = findRelatedPillar(for: suggestion.title) {
+            suggestion.relatedPillarId = pillar.id
+            suggestion.relatedPillarTitle = pillar.name
+        }
+
+        suggestion.suggestedTime = resolveSuggestedStartTime(for: suggestion)
+        dataManager.applySuggestion(suggestion)
+
+        let timeFormatter = DateFormatter()
+        timeFormatter.dateStyle = .none
+        timeFormatter.timeStyle = .short
+        let datePart = describeDate(suggestion.suggestedTime)
+        let timePart = timeFormatter.string(from: suggestion.suggestedTime)
+        let schedulingLine = "Scheduled \(suggestion.title) for \(datePart) at \(timePart)."
+
+        let trimmedResponse = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedResponse.isEmpty {
+            return schedulingLine
+        }
+        return "\(trimmedResponse)\n\(schedulingLine)"
+    }
+
+    private func resolveSuggestedStartTime(for suggestion: Suggestion) -> Date {
+        let now = Date()
+        let anchor = suggestion.suggestedTime > now ? suggestion.suggestedTime : now.addingTimeInterval(300)
+        return findNextAvailableTime(after: anchor)
+    }
+
+    private func findNextAvailableTime(after startTime: Date) -> Date {
+        let calendar = Calendar.current
+        let currentDay = dataManager.appState.currentDay.date
+        guard calendar.isDate(startTime, inSameDayAs: currentDay) else {
+            return startTime
+        }
+
+        let sortedBlocks = dataManager.appState.currentDay.blocks.sorted { $0.startTime < $1.startTime }
+        var searchTime = startTime
+        let minimumDuration: TimeInterval = 30 * 60
+
+        for block in sortedBlocks {
+            if searchTime.addingTimeInterval(minimumDuration) <= block.startTime {
+                return searchTime
+            }
+
+            if block.endTime > searchTime {
+                searchTime = block.endTime
+            }
+        }
+
+        return searchTime
+    }
+
+    private func describeDate(_ date: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) {
+            return "today"
+        }
+        if calendar.isDateInTomorrow(date) {
+            return "tomorrow"
+        }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter.string(from: date)
+    }
+
+    private func findRelatedGoal(for eventTitle: String) -> Goal? {
+        let lowercaseTitle = eventTitle.lowercased()
+        return dataManager.appState.goals.first { goal in
+            let goalWords = goal.title.lowercased().split(separator: " ")
+            let titleWords = lowercaseTitle.split(separator: " ")
+            return Set(goalWords).intersection(Set(titleWords)).count >= 1 && goal.isActive
+        }
+    }
+
+    private func findRelatedPillar(for eventTitle: String) -> Pillar? {
+        let lowercaseTitle = eventTitle.lowercased()
+        return dataManager.appState.pillars.first { pillar in
+            let pillarWords = pillar.name.lowercased().split(separator: " ")
+            let titleWords = lowercaseTitle.split(separator: " ")
+            return Set(pillarWords).intersection(Set(titleWords)).count >= 1
+        }
     }
 }
 
