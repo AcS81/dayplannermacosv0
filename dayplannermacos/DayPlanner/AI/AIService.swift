@@ -162,6 +162,16 @@ class AIService: ObservableObject {
     private var openAIModel: String = "gpt-4o-mini"
     private var localModel: String = "openai/gpt-oss-20b"
     private let session: URLSession
+    private let iso8601WithFractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    private let iso8601Basic: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
     
     // Smart confidence thresholds for different actions
     private let confidenceThresholds = AIConfidenceThresholds()
@@ -670,7 +680,7 @@ class AIService: ObservableObject {
         """
         
         let response = try await generateCompletion(prompt: eventCreationPrompt)
-        return try parseEventCreationResponse(response, analysis: analysis)
+        return try parseEventCreationResponse(response, analysis: analysis, context: context)
     }
     
     private func processGoalCreation(_ message: String, context: DayContext, analysis: MessageActionAnalysis) async throws -> AIResponse {
@@ -851,9 +861,21 @@ class AIService: ObservableObject {
     }
     
     private func processGeneralChat(_ message: String, context: DayContext, analysis: MessageActionAnalysis) async throws -> AIResponse {
+        let normalized = message.lowercased()
+        if isDailySummaryRequest(normalized) {
+            let summary = buildDailySummary(for: context)
+            return AIResponse(
+                text: summary,
+                suggestions: [],
+                actionType: nil,
+                createdItems: nil,
+                confidence: max(analysis.confidence, 0.6)
+            )
+        }
+
         let generalChatPrompt = """
         Respond to this user message in a helpful, encouraging way: "\(message)"
-        
+
         Context: \(context.summary)
         
         Provide a thoughtful response and suggest 1-2 activities if appropriate, but keep confidence low since this is general chat.
@@ -877,6 +899,70 @@ class AIService: ObservableObject {
         
         let response = try await generateCompletion(prompt: generalChatPrompt)
         return try parseEnhancedSuggestionResponse(response, analysis: analysis)
+    }
+
+    private func isDailySummaryRequest(_ normalized: String) -> Bool {
+        let keywords = [
+            "what have i done",
+            "what did i do",
+            "what have i accomplished",
+            "what happened today",
+            "what have i gotten done",
+            "what have i completed"
+        ]
+        return keywords.contains { normalized.contains($0) }
+    }
+
+    private func buildDailySummary(for context: DayContext) -> String {
+        let calendar = Calendar.current
+        let dayBlocks = context.existingBlocks
+            .filter { block in
+                block.confirmationState == .confirmed && calendar.isDate(block.startTime, inSameDayAs: context.date)
+            }
+            .sorted { $0.startTime < $1.startTime }
+
+        guard !dayBlocks.isEmpty else {
+            return "I don't see any confirmed activities for today yet. Let me know what you got up to and I'll lock it in."
+        }
+
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        let header = "Here's what you've locked for \(context.date.formatted(.dateTime.weekday(.wide).month().day())):"
+
+        let lines: [String] = dayBlocks.flatMap { block -> [String] in
+            var entries: [String] = []
+            let timeString = formatter.string(from: block.startTime)
+            let titleLine = "• \(timeString) — \(block.emoji) \(block.title)"
+            entries.append(titleLine)
+            let details = confirmationDetails(for: block)
+            entries.append(contentsOf: details.map { "    \($0)" })
+            return entries
+        }
+
+        return ([header] + lines).joined(separator: "\n")
+    }
+
+    private func confirmationDetails(for block: TimeBlock) -> [String] {
+        guard let notes = block.notes else { return [] }
+        let lines = notes
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("🔒") }
+
+        if lines.isEmpty { return [] }
+
+        var details: [String] = []
+        if let reflection = lines.first(where: { $0.lowercased().hasPrefix("user reflection:") }) {
+            details.append(reflection.replacingOccurrences(of: "User reflection:", with: "Reflection:").trimmingCharacters(in: .whitespaces))
+        }
+        if let weather = lines.first(where: { $0.lowercased().hasPrefix("weather noted:") }) {
+            details.append(weather.replacingOccurrences(of: "Weather noted:", with: "Weather:").trimmingCharacters(in: .whitespaces))
+        }
+        if details.isEmpty, let last = lines.last {
+            details.append(last)
+        }
+        return details
     }
     
     // MARK: - Private Methods
@@ -1187,7 +1273,7 @@ class AIService: ObservableObject {
         }
     }
     
-    private func parseEventCreationResponse(_ content: String, analysis: MessageActionAnalysis) throws -> AIResponse {
+    private func parseEventCreationResponse(_ content: String, analysis: MessageActionAnalysis, context: DayContext) throws -> AIResponse {
         let cleanContent = content
             .replacingOccurrences(of: "```json", with: "")
             .replacingOccurrences(of: "```", with: "")
@@ -1210,10 +1296,11 @@ class AIService: ObservableObject {
                 return UUID(uuidString: rawString)
             }
             let explanation = eventData["explanation"] as? String ?? "AI-generated activity"
+            let startTime = resolveEventStartTime(from: eventData["startTime"], context: context) ?? adjustStartTime(context.date, relativeTo: context)
             let suggestion = Suggestion(
                 title: eventData["title"] as? String ?? "New Activity",
                 duration: TimeInterval((eventData["duration"] as? Int ?? 1800)),
-                suggestedTime: Date(),
+                suggestedTime: startTime,
                 energy: EnergyType(rawValue: eventData["energy"] as? String ?? "daylight") ?? .daylight,
                 emoji: eventData["emoji"] as? String ?? "📋",
                 explanation: explanation,
@@ -1251,6 +1338,23 @@ class AIService: ObservableObject {
                 confidence: analysis.confidence
             )
         }
+    }
+
+    private func resolveEventStartTime(from value: Any?, context: DayContext) -> Date? {
+        guard let raw = value as? String else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let parsed = iso8601WithFractional.date(from: trimmed) ?? iso8601Basic.date(from: trimmed) {
+            return adjustStartTime(parsed, relativeTo: context)
+        }
+        return nil
+    }
+
+    private func adjustStartTime(_ date: Date, relativeTo context: DayContext) -> Date {
+        let calendar = Calendar.current
+        if calendar.isDate(context.date, inSameDayAs: Date()), date < Date() {
+            return Date()
+        }
+        return date
     }
     
     private func parseGoalCreationResponse(_ content: String, analysis: MessageActionAnalysis) throws -> AIResponse {

@@ -73,7 +73,8 @@ struct EnhancedDayView: View {
                     ghostSuggestions: ghostSuggestions,
                     dayStartHour: dayStartHour,
                     selectedGhosts: $selectedGhostIDs,
-                    onGhostToggle: toggleGhostSelection
+                    onGhostToggle: toggleGhostSelection,
+                    onGhostReject: rejectGhostSuggestion
                 )
                 .padding(.trailing, 2)
                 .padding(.bottom, ghostAcceptanceInset)
@@ -203,9 +204,24 @@ struct EnhancedDayView: View {
         } else {
             selectedGhostIDs.insert(suggestion.id)
         }
-        
+
         // Push state changes to calendar panel via direct callback
         onGhostAcceptanceChange?(acceptanceInfo)
+    }
+
+    private func rejectGhostSuggestion(_ suggestion: Suggestion) {
+        dataManager.rejectSuggestion(suggestion, reason: "Dismissed from timeline")
+        selectedGhostIDs.remove(suggestion.id)
+        if reduceMotion {
+            ghostSuggestions.removeAll { $0.id == suggestion.id }
+        } else {
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) {
+                ghostSuggestions.removeAll { $0.id == suggestion.id }
+            }
+        }
+        Task { @MainActor in
+            await refreshGhosts()
+        }
     }
 }
 
@@ -359,6 +375,18 @@ private extension EnhancedDayView {
             }
 
             let endTime = startTime.addingTimeInterval(finalDuration)
+
+            if dataManager.isTimeSlotDiscouraged(for: suggestion, at: startTime) {
+                let push = max(minimumDuration, suggestion.duration)
+                let newStart = startTime.addingTimeInterval(push)
+                if newStart < gap.end - minimumDuration {
+                    gap.start = newStart
+                    gaps[index] = gap
+                } else {
+                    gaps.remove(at: index)
+                }
+                continue
+            }
 
             if let conflict = placed.first(where: { existing in
                 let existingEnd = existing.suggestedTime.addingTimeInterval(existing.duration)

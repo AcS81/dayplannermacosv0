@@ -376,10 +376,18 @@ class AppDataManager: ObservableObject {
     // MARK: - Time Block Operations
     
     func addTimeBlock(_ block: TimeBlock) {
-        withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
-            appState.addBlock(block)
+        let calendar = Calendar.current
+        let targetDay = calendar.startOfDay(for: block.startTime)
+        let currentDay = calendar.startOfDay(for: appState.currentDay.date)
+
+        if targetDay == currentDay {
+            withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+                appState.addBlock(block)
+            }
+        } else {
+            append(block: block, to: targetDay)
         }
-        
+
         // Record for pattern learning
         let creationSource: String
         switch block.origin {
@@ -391,20 +399,36 @@ class AppDataManager: ObservableObject {
         case .manual: creationSource = "manual"
         }
         recordTimeBlockCreation(block, source: creationSource)
-        
+
         // Award XXP for productive actions
         if block.energy == .sunrise || block.energy == .daylight {
             appState.addXXP(Int(block.duration / 60), reason: "Added productive time block")
         }
-        
-        refreshPastBlocks()
+
+        if targetDay == currentDay {
+            refreshPastBlocks()
+        }
         save()
-        if block.origin != .external {
+        if block.origin != .external && targetDay == currentDay {
             onboardingDelegate?.onboardingDidCreateBlock(block, acceptedSuggestion: block.origin == .suggestion)
         }
-        
+
         // Trigger insight refresh
         // insightsEngine?.checkForUpdates()
+    }
+
+    private func append(block: TimeBlock, to day: Date) {
+        let calendar = Calendar.current
+        if let index = appState.historicalDays.firstIndex(where: { calendar.isDate($0.date, inSameDayAs: day) }) {
+            appState.historicalDays[index].blocks.append(block)
+            appState.historicalDays[index].blocks.sort { $0.startTime < $1.startTime }
+        } else if calendar.isDate(appState.currentDay.date, inSameDayAs: day) {
+            appState.addBlock(block)
+        } else {
+            var newDay = Day(date: day)
+            newDay.blocks = [block]
+            appState.historicalDays.append(newDay)
+        }
     }
     
     func updateTimeBlock(_ block: TimeBlock) {
@@ -687,13 +711,31 @@ class AppDataManager: ObservableObject {
         guard let index = appState.currentDay.blocks.firstIndex(where: { $0.id == blockId }) else { return }
         var block = appState.currentDay.blocks[index]
         let trimmedNotes = notes?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        let confirmationTime = formatter.string(from: Date())
+
+        var detailLines: [String] = []
         if let trimmedNotes, !trimmedNotes.isEmpty {
-            block.notes = trimmedNotes
+            detailLines.append("User reflection: \(trimmedNotes)")
+        }
+        if let weather = weatherService.currentWeather {
+            let condition = weather.condition.rawValue.lowercased()
+            let description = "Weather noted: \(weather.condition.emoji) \(condition) at \(Int(weather.temperature))°F"
+            detailLines.append(description)
+        }
+        let header = "🔒 Confirmed at \(confirmationTime) — \(block.title)"
+        let detailText = ([header] + detailLines).joined(separator: "\n")
+        if let existingNotes = block.notes, !existingNotes.isEmpty {
+            block.notes = existingNotes + "\n\n" + detailText
+        } else {
+            block.notes = detailText
         }
         block.confirmationState = .confirmed
         block.glassState = .solid
         appState.currentDay.blocks[index] = block
-        
+
         let record = Record(
             blockId: block.id,
             title: block.title,
@@ -2315,14 +2357,55 @@ class AppDataManager: ObservableObject {
     func rejectSuggestion(_ suggestion: Suggestion, reason: String? = nil) {
         // Record rejection for learning
         recordSuggestionFeedback(suggestion, accepted: false, reason: reason)
-        
+
         // Track rejection patterns for learning
         let rejectionPattern = "rejected:\(suggestion.title.lowercased())"
         if !appState.userPatterns.contains(rejectionPattern) {
             appState.userPatterns.append(rejectionPattern)
         }
+        registerSuggestionRejection(suggestion, reason: reason)
         save()
         requestMicroUpdate(.rejectedSuggestion)
+    }
+
+    private func registerSuggestionRejection(_ suggestion: Suggestion, reason: String?) {
+        purgeStaleSuggestionRejections()
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: suggestion.suggestedTime)
+        if let index = appState.suggestionRejections.firstIndex(where: {
+            $0.title.lowercased() == suggestion.title.lowercased() &&
+            calendar.isDate($0.day, inSameDayAs: day) &&
+            abs($0.startTime.timeIntervalSince(suggestion.suggestedTime)) < 900
+        }) {
+            appState.suggestionRejections[index].increment(reason: reason)
+        } else {
+            let record = SuggestionRejectionRecord(
+                title: suggestion.title,
+                day: day,
+                startTime: suggestion.suggestedTime,
+                duration: suggestion.duration,
+                reason: reason,
+                count: 1,
+                lastRejectedAt: Date()
+            )
+            appState.suggestionRejections.append(record)
+        }
+    }
+
+    func isTimeSlotDiscouraged(for suggestion: Suggestion, at startTime: Date) -> Bool {
+        purgeStaleSuggestionRejections()
+        let calendar = Calendar.current
+        return appState.suggestionRejections.contains { record in
+            record.title.lowercased() == suggestion.title.lowercased() &&
+            calendar.isDate(record.day, inSameDayAs: startTime) &&
+            abs(record.startTime.timeIntervalSince(startTime)) < 900 &&
+            record.count > 0
+        }
+    }
+
+    private func purgeStaleSuggestionRejections() {
+        let cutoff = Calendar.current.date(byAdding: .day, value: -3, to: Date()) ?? Date()
+        appState.suggestionRejections.removeAll { $0.lastRejectedAt < cutoff }
     }
     
     /// Get all items related to a specific emoji (for consistency checking)

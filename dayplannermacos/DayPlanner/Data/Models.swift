@@ -671,6 +671,7 @@ struct AppState: Codable {
     var todoItems: [TodoItem] = []
     var moodEntries: [MoodEntry] = []
     var onboarding: OnboardingState = OnboardingState()
+    var suggestionRejections: [SuggestionRejectionRecord] = []
     
     // Scheduling emphasis and feedback signals
     var pinnedGoalIds: Set<UUID> = []
@@ -702,6 +703,25 @@ struct AppState: Codable {
     mutating func addXXP(_ amount: Int, reason: String) {
         userXXP += amount
         // Could log the reason for transparency
+    }
+}
+
+struct SuggestionRejectionRecord: Identifiable, Codable {
+    var id: UUID = UUID()
+    var title: String
+    var day: Date
+    var startTime: Date
+    var duration: TimeInterval
+    var reason: String?
+    var count: Int
+    var lastRejectedAt: Date
+
+    mutating func increment(reason: String?) {
+        count += 1
+        if let reason, !reason.isEmpty {
+            self.reason = reason
+        }
+        lastRejectedAt = Date()
     }
 }
 
