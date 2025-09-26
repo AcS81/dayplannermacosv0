@@ -601,6 +601,60 @@ struct Suggestion: Identifiable, Codable, Equatable {
             origin: .suggestion
         )
     }
+
+    /// Fingerprint representing this suggestion's scheduling choice so we can
+    /// track feedback about specific times the user reacted to.
+    var scheduleFingerprint: String {
+        // Round to 5 minute increments so equivalent placements share feedback.
+        let minutesFromReference = Int(suggestedTime.timeIntervalSinceReferenceDate / 300)
+        return "\(title.lowercased())|\(Int(duration))|\(energy.rawValue)|\(minutesFromReference)"
+    }
+}
+
+/// Memory of when the user rejected a specific scheduling proposal so future
+/// ghost recommendations can act more considerately.
+struct SuggestionRejectionMemory: Codable {
+    var fingerprint: String
+    var title: String
+    var lastSuggestedTime: Date
+    var lastRejectedAt: Date
+    var rejectionCount: Int
+
+    mutating func recordRejection(at timestamp: Date, suggestedTime: Date) {
+        lastRejectedAt = timestamp
+        lastSuggestedTime = suggestedTime
+        rejectionCount += 1
+    }
+
+    /// Multiplier that gently suppresses recently rejected suggestions without
+    /// banning them forever. The more often a user dismisses a slot, the
+    /// stronger the penalty (with a floor so we never completely remove it).
+    func penaltyMultiplier(relativeTo timestamp: Date, candidateTime: Date) -> Double {
+        // Base penalty grows with rejection count, capped to avoid zero weight.
+        let base = max(0.25, 1.0 - 0.25 * Double(min(rejectionCount, 3)))
+
+        let timeSinceRejection = timestamp.timeIntervalSince(lastRejectedAt)
+        let timeDelta = abs(candidateTime.timeIntervalSince(lastSuggestedTime))
+
+        var multiplier = base
+
+        // Strongly penalize suggesting essentially the exact same slot again.
+        if timeDelta < 1800 { // 30 minutes window
+            multiplier *= 0.35
+        } else if timeDelta < 3600 { // 1 hour window
+            multiplier *= 0.6
+        }
+
+        // Gradually forgive the rejection over time so future passes can use it.
+        if timeSinceRejection > 6 * 3600 { // 6 hours later
+            multiplier = max(multiplier, 0.8)
+        }
+        if timeSinceRejection > 12 * 3600 { // essentially cooled off
+            multiplier = 1.0
+        }
+
+        return multiplier
+    }
 }
 
 /// Context for AI decision making
@@ -658,6 +712,7 @@ struct AppState: Codable {
     var recentChains: [Chain] = []
     var routines: [Routine] = [] // Promoted chains that became routines
     var userPatterns: [String] = [] // Simple pattern storage
+    var suggestionRejectionMemories: [String: SuggestionRejectionMemory] = [:]
     var preferences: UserPreferences = UserPreferences()
     var records: [Record] = []
     
