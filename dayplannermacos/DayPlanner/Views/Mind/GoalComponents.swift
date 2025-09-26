@@ -294,6 +294,35 @@ struct EnhancedGoalCard: View {
                             .foregroundStyle(.orange)
                     }
                 }
+                
+                // AI connections to pillars
+                if !connectedPillars.isEmpty {
+                    HStack(spacing: 4) {
+                        Text("Connected pillars:")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        
+                        ForEach(connectedPillars.prefix(2)) { pillar in
+                            HStack(spacing: 2) {
+                                Text(pillar.emoji)
+                                    .font(.caption2)
+                                Text(pillar.name)
+                                    .font(.caption2)
+                                    .lineLimit(1)
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(pillar.color.color.opacity(0.15), in: Capsule())
+                            .foregroundStyle(pillar.color.color)
+                        }
+                        
+                        if connectedPillars.count > 2 {
+                            Text("+\(connectedPillars.count - 2)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
             
             Spacer()
@@ -353,6 +382,12 @@ struct EnhancedGoalCard: View {
 
     private var isPinned: Bool {
         dataManager.isGoalPinned(goal.id)
+    }
+    
+    private var connectedPillars: [Pillar] {
+        dataManager.appState.pillars.filter { pillar in
+            pillar.relatedGoalId == goal.id
+        }
     }
     
     private var cardHighlighted: Bool {
@@ -825,7 +860,7 @@ struct EnhancedGoalCreatorSheet: View {
     @State private var importance = 3
     @State private var selectedState: GoalState = .draft
     @State private var selectedEmoji = "🎯"
-    @State private var relatedPillarIds: [UUID] = []
+    // AI will automatically connect goals to relevant pillars
     @State private var aiSuggestions = ""
     @State private var isGeneratingAI = false
     @State private var targetDate: Date?

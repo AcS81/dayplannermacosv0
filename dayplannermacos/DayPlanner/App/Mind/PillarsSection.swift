@@ -700,15 +700,11 @@ struct ComprehensivePillarEditorSheet: View {
 
     private var linkingSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            SectionHeader(title: "Connections", subtitle: "Tie this pillar to a goal (optional)", systemImage: "target", gradient: LinearGradient(colors: [.indigo, .purple], startPoint: .leading, endPoint: .trailing))
+            SectionHeader(title: "AI Connections", subtitle: "The AI will automatically connect this pillar to relevant goals", systemImage: "brain", gradient: LinearGradient(colors: [.indigo, .purple], startPoint: .leading, endPoint: .trailing))
 
-            Picker("Supports goal", selection: $relatedGoalId) {
-                Text("None").tag(nil as UUID?)
-                ForEach(dataManager.appState.goals) { goal in
-                    Text(goal.title).tag(goal.id as UUID?)
-                }
-            }
-            .pickerStyle(.menu)
+            Text("Based on your pillar's description, values, and usage patterns, the AI will automatically identify and connect it to relevant goals to improve suggestion accuracy.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .padding(16)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
@@ -740,7 +736,7 @@ struct ComprehensivePillarEditorSheet: View {
             constraints: sanitizedPillarStrings(from: constraintsText),
             color: CodableColor(selectedColor),
             emoji: emoji.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "🏛️",
-            relatedGoalId: relatedGoalId,
+            relatedGoalId: nil, // AI will automatically connect
             createdAt: pillar.createdAt
         )
 

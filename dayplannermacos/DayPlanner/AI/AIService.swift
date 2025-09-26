@@ -177,8 +177,8 @@ class AIService: ObservableObject {
         config.allowsCellularAccess = false // Local network only
         self.session = URLSession(configuration: config)
         
+        // Don't check connection immediately - wait for configuration
         Task {
-            await checkConnection()
             await startConnectionMonitoring()
         }
     }
@@ -195,6 +195,8 @@ class AIService: ObservableObject {
         baseURL = provider == .openAI ? "https://api.openai.com" : customEndpoint
         openAIAPIKey = preferences.openaiApiKey
         openAIModel = preferences.openaiModel.isEmpty ? "gpt-4o-mini" : preferences.openaiModel
+        
+        // Check connection after configuration
         Task {
             await checkConnection()
         }
@@ -533,7 +535,7 @@ class AIService: ObservableObject {
 
     // MARK: - Mind Editor
 
-    func processMindCommands(message: String, context: MindEditorContext) async throws -> MindCommandResponse {
+    func processMindCommands(message: String, context: MindEditorContext, patternInsights: [ActionableInsight] = []) async throws -> MindCommandResponse {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
@@ -543,6 +545,13 @@ class AIService: ObservableObject {
         }
 
         let escapedMessage = message.replacingOccurrences(of: "\"", with: "\\\"")
+        
+        // Include pattern insights in the prompt
+        let insightsText = patternInsights.isEmpty ? "" : """
+        
+        PATTERN INSIGHTS (consider these when making recommendations):
+        \(patternInsights.map { "• \($0.title): \($0.suggestedAction) (confidence: \(Int($0.confidence * 100))%)" }.joined(separator: "\n"))
+        """
 
         let prompt = """
         You are the Mind editor for a personal planning app. Adjust the user's long-term goals and pillars using precise commands.
@@ -551,7 +560,14 @@ class AIService: ObservableObject {
         \(contextJSON)
 
         USER_REQUEST:
-        "\(escapedMessage)"
+        "\(escapedMessage)"\(insightsText)
+
+        INSTRUCTIONS:
+        - Parse the user's intent even if the grammar is unclear
+        - If they mention creating a goal, extract the goal title and any details
+        - If they mention a deadline (like "by October"), include it in the description
+        - Consider the pattern insights when making recommendations
+        - Be helpful and interpret their intent rather than asking for clarification unless absolutely necessary
 
         Respond with ONLY valid JSON using snake_case keys and this shape:
         {
@@ -919,7 +935,7 @@ class AIService: ObservableObject {
 
         let model = provider == .openAI ? openAIModel : localModel
 
-        var requestBody: [String: Any] = [
+        let requestBody: [String: Any] = [
             "model": model,
             "messages": [
                 [

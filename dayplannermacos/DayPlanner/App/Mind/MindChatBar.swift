@@ -4,6 +4,8 @@ import Foundation
 struct MindChatBar: View {
     @EnvironmentObject private var dataManager: AppDataManager
     @EnvironmentObject private var aiService: AIService
+    @EnvironmentObject private var patternEngine: PatternLearningEngine
+    @StateObject private var speechService = SpeechService()
     @FocusState private var isFocused: Bool
 
     @State private var inputText: String = ""
@@ -12,6 +14,8 @@ struct MindChatBar: View {
     @State private var appliedMessages: [String] = []
     @State private var clarification: String?
     @State private var errorMessage: String?
+    @State private var showingInsights = false
+    @State private var isVoiceEnabled = false
 
     private let helperPrompts = [
         "Create a goal to publish the launch post",
@@ -21,6 +25,28 @@ struct MindChatBar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // Voice transcription display
+            if !speechService.transcribedText.isEmpty {
+                HStack {
+                    Image(systemName: "waveform")
+                        .font(.caption)
+                        .foregroundStyle(.purple)
+                    Text("Voice: \(speechService.transcribedText)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Use") {
+                        inputText = speechService.transcribedText
+                        speechService.transcribedText = ""
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    .foregroundStyle(.purple)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.purple.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
+            }
             HStack(spacing: 8) {
                 Image(systemName: clarification == nil ? "brain.head.profile" : "questionmark.bubble")
                     .font(.title3)
@@ -31,6 +57,15 @@ struct MindChatBar: View {
                 Spacer()
                 if isSending {
                     ProgressView().controlSize(.small)
+                } else if !aiService.isConnected {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(.red)
+                            .frame(width: 6, height: 6)
+                        Text("AI Offline")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
                 }
             }
 
@@ -61,22 +96,91 @@ struct MindChatBar: View {
                     .font(.caption)
                     .foregroundStyle(.red)
             }
+            
+            // Pattern Insights Display
+            if !patternEngine.actionableInsights.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: "brain.head.profile")
+                            .font(.caption)
+                            .foregroundStyle(.purple)
+                        Text("Pattern Insights")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.purple)
+                        Spacer()
+                        Button(showingInsights ? "Hide" : "Show") {
+                            showingInsights.toggle()
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                        .foregroundStyle(.purple)
+                    }
+                    
+                    if showingInsights {
+                        ForEach(patternEngine.actionableInsights.prefix(3)) { insight in
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: insightIcon(for: insight.actionType))
+                                    .font(.caption2)
+                                    .foregroundStyle(insightColor(for: insight.actionType))
+                                    .frame(width: 12)
+                                
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(insight.title)
+                                        .font(.caption)
+                                        .fontWeight(.medium)
+                                        .foregroundStyle(.primary)
+                                    
+                                    Text(insight.suggestedAction)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(2)
+                                }
+                                
+                                Spacer()
+                                
+                                Text("\(Int(insight.confidence * 100))%")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(insightBackgroundColor(for: insight.actionType), in: RoundedRectangle(cornerRadius: 6))
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.purple.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+            }
 
             HStack(spacing: 12) {
                 TextField("Directly shape goals or pillars…", text: $inputText, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
-                    .disabled(isSending)
+                    .disabled(isSending || !aiService.isConnected)
                     .focused($isFocused)
                     .submitLabel(.send)
                     .onSubmit(sendMessage)
+                
+                // Voice button
+                Button(action: toggleVoiceInput) {
+                    Image(systemName: speechService.isListening ? "mic.fill" : "mic")
+                        .font(.headline)
+                        .foregroundStyle(speechService.isListening ? .red : .purple)
+                        .padding(10)
+                        .background(speechService.isListening ? Color.red.opacity(0.1) : Color.purple.opacity(0.1), in: Circle())
+                }
+                .disabled(isSending || speechService.authorizationStatus == .denied)
+                .help(speechService.authorizationStatus == .denied ? "Microphone permission denied" : "Voice input")
+                
                 Button(action: sendMessage) {
                     Image(systemName: "paperplane.fill")
                         .font(.headline)
                         .foregroundStyle(.white)
                         .padding(10)
-                        .background(isSending ? Color.gray : Color.purple, in: Circle())
+                        .background(isSending ? Color.gray : (aiService.isConnected ? Color.purple : Color.red), in: Circle())
                 }
-                .disabled(isSending || inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(isSending || inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !aiService.isConnected)
             }
 
             HStack(spacing: 10) {
@@ -123,7 +227,7 @@ struct MindChatBar: View {
             let response: MindCommandResponse?
             do {
                 let context = await MainActor.run { dataManager.makeMindEditorContext() }
-                response = try await aiService.processMindCommands(message: message, context: context)
+                response = try await aiService.processMindCommands(message: message, context: context, patternInsights: patternEngine.actionableInsights)
             } catch {
                 response = fallbackResponse(for: message)
                 if response == nil {
@@ -198,18 +302,51 @@ struct MindChatBar: View {
 
     private func offlineCreation(for message: String) -> MindCommandResponse? {
         let lowered = message.lowercased()
-        if lowered.contains("goal") {
-            let title = extractTitle(from: message, keyword: "goal") ?? "New Goal"
+        if lowered.contains("goal") || lowered.contains("finish") || lowered.contains("complete") {
+            // Extract goal title more intelligently
+            var title = "New Goal"
+            var description = ""
+            
+            // Try to extract a meaningful title
+            if let goalTitle = extractTitle(from: message, keyword: "goal") {
+                title = goalTitle
+            } else if let finishTitle = extractTitle(from: message, keyword: "finish") {
+                title = "Finish \(finishTitle)"
+            } else if let completeTitle = extractTitle(from: message, keyword: "complete") {
+                title = "Complete \(completeTitle)"
+            } else {
+                // Try to extract the main subject
+                let words = message.components(separatedBy: .whitespacesAndNewlines)
+                if let appIndex = words.firstIndex(where: { $0.lowercased() == "app" }) {
+                    let beforeApp = words[..<appIndex].joined(separator: " ")
+                    if !beforeApp.isEmpty {
+                        title = "Finish \(beforeApp) app"
+                    }
+                }
+            }
+            
+            // Extract deadline information
+            if lowered.contains("october") {
+                description = "Target completion: October"
+            } else if lowered.contains("by") {
+                if let byRange = lowered.range(of: "by") {
+                    let afterBy = String(lowered[byRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !afterBy.isEmpty {
+                        description = "Target completion: \(afterBy.capitalizedFirst)"
+                    }
+                }
+            }
+            
             let payload = MindCommandCreateGoal(
                 title: title,
-                description: nil,
-                emoji: nil,
-                importance: nil,
+                description: description.isEmpty ? nil : description,
+                emoji: "🎯",
+                importance: 4, // High importance for completion goals
                 nodes: [],
                 relatedPillarIds: [],
                 relatedPillarNames: []
             )
-            return MindCommandResponse(summary: "Captured new goal \(title)", commands: [.createGoal(payload)])
+            return MindCommandResponse(summary: "Created goal: \(title)", commands: [.createGoal(payload)])
         }
         if lowered.contains("pillar") {
             let name = extractTitle(from: message, keyword: "pillar") ?? "New Pillar"
@@ -525,5 +662,63 @@ private extension String {
     var capitalizedFirst: String {
         guard let first = first else { return self }
         return String(first).uppercased() + dropFirst()
+    }
+}
+
+// MARK: - Pattern Insights Helpers
+
+extension MindChatBar {
+    private func insightIcon(for actionType: InsightActionType) -> String {
+        switch actionType {
+        case .createBlock: return "plus.circle"
+        case .modifySchedule: return "calendar"
+        case .createChain: return "link"
+        case .updateGoal: return "target"
+        case .createPillar: return "pillar"
+        case .adjustEnergy: return "bolt"
+        case .optimizeTiming: return "clock"
+        }
+    }
+    
+    private func insightColor(for actionType: InsightActionType) -> Color {
+        switch actionType {
+        case .createBlock: return .blue
+        case .modifySchedule: return .green
+        case .createChain: return .purple
+        case .updateGoal: return .orange
+        case .createPillar: return .pink
+        case .adjustEnergy: return .yellow
+        case .optimizeTiming: return .cyan
+        }
+    }
+    
+    private func insightBackgroundColor(for actionType: InsightActionType) -> Color {
+        switch actionType {
+        case .createBlock: return Color.blue.opacity(0.1)
+        case .modifySchedule: return Color.green.opacity(0.1)
+        case .createChain: return Color.purple.opacity(0.1)
+        case .updateGoal: return Color.orange.opacity(0.1)
+        case .createPillar: return Color.pink.opacity(0.1)
+        case .adjustEnergy: return Color.yellow.opacity(0.1)
+        case .optimizeTiming: return Color.cyan.opacity(0.1)
+        }
+    }
+    
+    private func toggleVoiceInput() {
+        if speechService.isListening {
+            Task {
+                await speechService.stopListening()
+            }
+        } else {
+            Task {
+                do {
+                    try await speechService.startListening()
+                } catch {
+                    await MainActor.run {
+                        errorMessage = "Voice input error: \(error.localizedDescription)"
+                    }
+                }
+            }
+        }
     }
 }

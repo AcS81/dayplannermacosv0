@@ -572,33 +572,14 @@ struct EventConnectionsTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Text("Connections")
+            Text("AI Connections")
                 .font(.title3)
                 .fontWeight(.semibold)
-
-            connectionSection(
-                title: "Goal alignment",
-                icon: "target",
-                selection: selectedGoal?.title ?? "No goal selected",
-                description: selectedGoal?.description.isEmpty == false ? selectedGoal!.description : "Attach a goal so the assistant knows what this block advances."
-            ) {
-                Button("None") { block.relatedGoalId = nil }
-                ForEach(goals) { goal in
-                    Button(goal.title) { block.relatedGoalId = goal.id }
-                }
-            }
-
-            connectionSection(
-                title: "Pillar influence",
-                icon: "building.columns",
-                selection: selectedPillar?.name ?? "No pillar selected",
-                description: selectedPillar?.description.isEmpty == false ? selectedPillar!.description : "Link a pillar to bias future suggestions toward this principle."
-            ) {
-                Button("None") { block.relatedPillarId = nil }
-                ForEach(pillars) { pillar in
-                    Button(pillar.name) { block.relatedPillarId = pillar.id }
-                }
-            }
+            
+            Text("The AI automatically connects events to relevant goals and pillars based on content analysis. These connections help improve future suggestions.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 8)
 
             if let goal = selectedGoal {
                 HStack(spacing: 8) {
@@ -626,6 +607,14 @@ struct EventConnectionsTab: View {
                         .padding(.vertical, 4)
                         .background(Color.purple.opacity(0.12), in: Capsule())
                 }
+            }
+
+            if selectedGoal == nil && selectedPillar == nil {
+                Text("No AI connections detected yet. The AI will automatically identify relevant goals and pillars as it learns from your patterns.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding()
+                    .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
             }
 
             Spacer()

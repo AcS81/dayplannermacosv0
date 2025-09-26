@@ -162,9 +162,19 @@ private struct GhostEventCard: View {
                             .foregroundStyle(Color.white.opacity(0.9))
                             .lineLimit(2)
                         Spacer()
-                        Text(suggestion.suggestedTime.timeString)
-                            .font(.caption2)
-                            .foregroundStyle(Color.white.opacity(0.7))
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text(suggestion.suggestedTime.timeString)
+                                .font(.caption2)
+                                .foregroundStyle(Color.white.opacity(0.7))
+                            
+                            // Add visual hint for interaction
+                            if !isSelected {
+                                Text("Tap to select")
+                                    .font(.caption2)
+                                    .foregroundStyle(Color.white.opacity(0.5))
+                                    .italic()
+                            }
+                        }
                     }
                     
                     HStack(spacing: 8) {
@@ -360,30 +370,46 @@ struct GhostAcceptanceBar: View {
         selectedCount > 0 ? onAcceptSelected : onAcceptAll
     }
     
+    private var instructionText: String {
+        if selectedCount == 0 {
+            return "Tap suggestions above to select, or accept all"
+        } else {
+            return "Selected \(selectedCount) of \(totalCount) suggestions"
+        }
+    }
+    
     var body: some View {
-        HStack(spacing: 16) {
-            HStack(spacing: 10) {
-                Image(systemName: "sparkles")
-                    .font(.title3)
-                    .foregroundStyle(Color.blue.opacity(0.9))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Recommendations")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(subtitle)
-                        .font(.footnote)
-                        .fontWeight(.medium)
+        VStack(spacing: 8) {
+            HStack(spacing: 16) {
+                HStack(spacing: 10) {
+                    Image(systemName: "sparkles")
+                        .font(.title3)
+                        .foregroundStyle(Color.blue.opacity(0.9))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Recommendations")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(subtitle)
+                            .font(.footnote)
+                            .fontWeight(.medium)
+                    }
                 }
+                
+                Spacer()
+                
+                Button(buttonTitle, action: buttonAction)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .tint(.blue)
+                    .padding(.vertical, 2)
+                    .accessibilityHint(Text(selectedCount > 0 ? "Stages the selected suggestions" : "Stages all suggestions"))
             }
             
-            Spacer()
-            
-            Button(buttonTitle, action: buttonAction)
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .tint(.blue)
-                .padding(.vertical, 2)
-                .accessibilityHint(Text(selectedCount > 0 ? "Stages the selected suggestions" : "Stages all suggestions"))
+            // Add instruction text for better discoverability
+            Text(instructionText)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 14)

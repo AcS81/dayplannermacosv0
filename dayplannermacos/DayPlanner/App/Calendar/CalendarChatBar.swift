@@ -10,6 +10,7 @@ struct CalendarChatBar: View {
     @State private var undoCandidate: Record?
     @State private var showConnectionAlert = false
     @State private var lastErrorMessage: String?
+    @State private var lastAIResponse: String?
     @FocusState private var isFocused: Bool
     
     private var currentPrompt: String {
@@ -67,6 +68,26 @@ struct CalendarChatBar: View {
                         .padding(.vertical, 4)
                         .background(Color.green.opacity(0.15), in: Capsule())
                 }
+            }
+            
+            if let response = lastAIResponse {
+                HStack(spacing: 8) {
+                    Image(systemName: "brain.head.profile")
+                        .font(.caption)
+                        .foregroundStyle(.purple)
+                    Text(response)
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.leading)
+                    Spacer()
+                    Button("×", action: { lastAIResponse = nil })
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.purple.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
             }
             
             if let block = activeBlock {
@@ -193,10 +214,42 @@ struct CalendarChatBar: View {
     
     private func sendPlanningMessage(_ message: String) {
         isSending = true
+        lastAIResponse = nil // Clear previous response
         Task {
             let context = dataManager.createEnhancedContext(date: dataManager.appState.currentDay.date)
             do {
-                _ = try await aiService.getSuggestions(for: message, context: context)
+                let response = try await aiService.processMessage(message, context: context)
+                await MainActor.run {
+                    // Show the AI response to the user
+                    if !response.text.isEmpty {
+                        lastAIResponse = response.text
+                        print("🤖 AI Response: \(response.text)")
+                        
+                        // Auto-schedule confident event creations
+                        if let _ = response.actionType, 
+                           let createdItems = response.createdItems,
+                           response.confidence > 0.8 {
+                            
+                            for item in createdItems {
+                                switch item.type {
+                                case .event:
+                                    if let suggestion = item.data as? Suggestion {
+                                        dataManager.applySuggestion(suggestion)
+                                        print("✅ Auto-scheduled confident event: \(suggestion.title)")
+                                    }
+                                case .goal, .pillar, .chain:
+                                    // These are handled by the mind editor
+                                    break
+                                }
+                            }
+                        }
+                        
+                        // If there are suggestions, they'll be automatically processed by the suggestion system
+                        if !response.suggestions.isEmpty {
+                            print("📝 Generated \(response.suggestions.count) suggestions")
+                        }
+                    }
+                }
             } catch {
                 await MainActor.run {
                     print("❌ Chat error: \(error.localizedDescription)")

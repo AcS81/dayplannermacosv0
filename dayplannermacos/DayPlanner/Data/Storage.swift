@@ -10,6 +10,7 @@ import SwiftUI
 import Combine
 import EventKit
 import CoreLocation
+import WeatherKit
 import Speech
 import AVFoundation
 
@@ -1204,16 +1205,84 @@ class AppDataManager: ObservableObject {
             .map { $0.aiGuidanceText }
             .filter { !$0.isEmpty }
 
+        // Include recently completed events for better AI awareness
+        let recentCompletedEvents = getRecentlyCompletedEvents(withinDays: 7)
+        let allRelevantBlocks = appState.currentDay.blocks + recentCompletedEvents
+
+        // Calculate available time more accurately
+        let availableTime = calculateAvailableTime(for: date, existingBlocks: appState.currentDay.blocks)
+
         return DayContext(
             date: date,
-            existingBlocks: appState.currentDay.blocks,
-            currentEnergy: .daylight,
-            preferredEmojis: ["🌊"],
-            availableTime: 3600,
+            existingBlocks: allRelevantBlocks,
+            currentEnergy: determineCurrentEnergy(),
+            preferredEmojis: extractPreferredEmojis(),
+            availableTime: availableTime,
             mood: appState.currentDay.mood,
             weatherContext: weatherService.getWeatherContext(),
             pillarGuidance: principleGuidance
         )
+    }
+    
+    /// Get recently completed events for AI context
+    private func getRecentlyCompletedEvents(withinDays: Int) -> [TimeBlock] {
+        let cutoffDate = Calendar.current.date(byAdding: .day, value: -withinDays, to: Date()) ?? Date()
+        
+        return appState.historicalDays
+            .filter { $0.date >= cutoffDate }
+            .flatMap { $0.blocks }
+            .filter { $0.confirmationState == .confirmed }
+            .sorted { $0.startTime > $1.startTime }
+    }
+    
+    /// Calculate available time for scheduling
+    private func calculateAvailableTime(for date: Date, existingBlocks: [TimeBlock]) -> TimeInterval {
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: date)
+        let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay) ?? date
+        
+        let totalDayTime = endOfDay.timeIntervalSince(startOfDay)
+        let scheduledTime = existingBlocks.reduce(0) { total, block in
+            total + block.duration
+        }
+        
+        return max(0, totalDayTime - scheduledTime)
+    }
+    
+    /// Determine current energy level based on time and recent activity
+    private func determineCurrentEnergy() -> EnergyType {
+        let hour = Calendar.current.component(.hour, from: Date())
+        
+        // Check recent high-energy activities
+        let recentHighEnergyBlocks = appState.currentDay.blocks
+            .filter { $0.energy == .sunrise && $0.startTime > Calendar.current.date(byAdding: .hour, value: -2, to: Date()) ?? Date() }
+        
+        if !recentHighEnergyBlocks.isEmpty {
+            return .sunrise
+        }
+        
+        // Time-based energy determination
+        switch hour {
+        case 6..<12: return .sunrise
+        case 12..<18: return .daylight
+        default: return .moonlight
+        }
+    }
+    
+    /// Extract preferred emojis from user's recent activity
+    private func extractPreferredEmojis() -> [String] {
+        let recentEmojis = appState.currentDay.blocks
+            .map { $0.emoji }
+            .filter { !$0.isEmpty }
+        
+        // Count emoji frequency
+        let emojiCounts = Dictionary(grouping: recentEmojis, by: { $0 })
+            .mapValues { $0.count }
+        
+        return emojiCounts
+            .sorted { $0.value > $1.value }
+            .prefix(5)
+            .map { $0.key }
     }
     
     private func findGaps(in interval: DateInterval, existingBlocks: [TimeBlock]) -> [DateInterval] {
@@ -2041,6 +2110,7 @@ class AppDataManager: ObservableObject {
         } else {
             titleMatches = []
         }
+        
         let hintMatches: [Goal]
         if let hints = suggestion.linkHints {
             var seen = Set<UUID>()
@@ -2057,20 +2127,28 @@ class AppDataManager: ObservableObject {
         } else {
             hintMatches = []
         }
-        if !titleMatches.isEmpty {
-            if !hintMatches.isEmpty {
-                let hintIds = Set(hintMatches.map { $0.id })
-                let intersection = titleMatches.filter { hintIds.contains($0.id) }
-                if !intersection.isEmpty {
-                    return uniqueGoals(intersection)
-                }
-            }
-            return uniqueGoals(titleMatches)
+        
+        // Enhanced semantic matching using suggestion title and explanation
+        let semanticMatches: [Goal] = appState.goals.filter { goal in
+            let goalText = "\(goal.title) \(goal.description)".lowercased()
+            let suggestionText = "\(suggestion.title) \(suggestion.explanation)".lowercased()
+            
+            // Check for keyword overlap
+            let goalKeywords = Set(goalText.components(separatedBy: .whitespacesAndNewlines.union(.punctuationCharacters)).filter { $0.count > 2 })
+            let suggestionKeywords = Set(suggestionText.components(separatedBy: .whitespacesAndNewlines.union(.punctuationCharacters)).filter { $0.count > 2 })
+            let overlap = goalKeywords.intersection(suggestionKeywords)
+            
+            // Consider it a match if there's significant keyword overlap
+            return overlap.count >= 2 || overlap.count >= Int(Double(min(goalKeywords.count, suggestionKeywords.count)) * 0.3)
         }
-        if !hintMatches.isEmpty {
-            return uniqueGoals(hintMatches)
-        }
-        return []
+        
+        // Combine and prioritize matches
+        var allMatches: [Goal] = []
+        allMatches.append(contentsOf: titleMatches)
+        allMatches.append(contentsOf: hintMatches)
+        allMatches.append(contentsOf: semanticMatches)
+        
+        return uniqueGoals(allMatches)
     }
 
     private func matchPillars(for suggestion: Suggestion) -> [Pillar] {
@@ -2080,6 +2158,7 @@ class AppDataManager: ObservableObject {
         } else {
             titleMatches = []
         }
+        
         let hintMatches: [Pillar]
         if let hints = suggestion.linkHints {
             var seen = Set<UUID>()
@@ -2096,20 +2175,28 @@ class AppDataManager: ObservableObject {
         } else {
             hintMatches = []
         }
-        if !titleMatches.isEmpty {
-            if !hintMatches.isEmpty {
-                let hintIds = Set(hintMatches.map { $0.id })
-                let intersection = titleMatches.filter { hintIds.contains($0.id) }
-                if !intersection.isEmpty {
-                    return uniquePillars(intersection)
-                }
-            }
-            return uniquePillars(titleMatches)
+        
+        // Enhanced semantic matching using suggestion content and pillar values/habits
+        let semanticMatches: [Pillar] = appState.pillars.filter { pillar in
+            let pillarText = "\(pillar.name) \(pillar.description) \(pillar.values.joined(separator: " ")) \(pillar.habits.joined(separator: " "))".lowercased()
+            let suggestionText = "\(suggestion.title) \(suggestion.explanation)".lowercased()
+            
+            // Check for keyword overlap
+            let pillarKeywords = Set(pillarText.components(separatedBy: .whitespacesAndNewlines.union(.punctuationCharacters)).filter { $0.count > 2 })
+            let suggestionKeywords = Set(suggestionText.components(separatedBy: .whitespacesAndNewlines.union(.punctuationCharacters)).filter { $0.count > 2 })
+            let overlap = pillarKeywords.intersection(suggestionKeywords)
+            
+            // Consider it a match if there's significant keyword overlap
+            return overlap.count >= 2 || overlap.count >= Int(Double(min(pillarKeywords.count, suggestionKeywords.count)) * 0.3)
         }
-        if !hintMatches.isEmpty {
-            return uniquePillars(hintMatches)
-        }
-        return []
+        
+        // Combine and prioritize matches
+        var allMatches: [Pillar] = []
+        allMatches.append(contentsOf: titleMatches)
+        allMatches.append(contentsOf: hintMatches)
+        allMatches.append(contentsOf: semanticMatches)
+        
+        return uniquePillars(allMatches)
     }
 
     private func uniqueGoals(_ goals: [Goal]) -> [Goal] {
@@ -2387,9 +2474,12 @@ class WeatherService: ObservableObject {
     @Published var currentWeather: WeatherInfo?
     @Published var isLoading = false
     @Published var lastUpdated: Date?
+    @Published var errorMessage: String?
     
     private let locationManager = CLLocationManager()
     private var locationDelegate: WeatherLocationDelegate?
+    private let appleWeatherService = WeatherKit.WeatherService.shared
+    var currentLocation: CLLocation?
     
     init() {
         locationDelegate = WeatherLocationDelegate(service: self)
@@ -2408,10 +2498,10 @@ class WeatherService: ObservableObject {
             locationManager.requestWhenInUseAuthorization()
             #endif
         case .authorizedAlways:
-            updateWeatherIfNeeded()
+            locationManager.requestLocation()
         #if !os(macOS)
         case .authorizedWhenInUse:
-            updateWeatherIfNeeded()
+            locationManager.requestLocation()
         #endif
         case .denied, .restricted:
             setDefaultWeather()
@@ -2445,10 +2535,49 @@ class WeatherService: ObservableObject {
         }
         #endif
         
+        guard let location = currentLocation else {
+            setDefaultWeather()
+            return
+        }
+        
         isLoading = true
+        errorMessage = nil
         defer { isLoading = false }
         
-        await simulateWeatherFetch()
+        do {
+            let weather = try await appleWeatherService.weather(for: location)
+            await MainActor.run {
+                self.currentWeather = WeatherInfo(
+                    temperature: weather.currentWeather.temperature.value,
+                    condition: mapWeatherCondition(weather.currentWeather.condition),
+                    humidity: Int(weather.currentWeather.humidity * 100),
+                    timestamp: Date()
+                )
+                self.lastUpdated = Date()
+            }
+        } catch {
+            await MainActor.run {
+                self.errorMessage = "Failed to fetch weather: \(error.localizedDescription)"
+                self.setDefaultWeather()
+            }
+        }
+    }
+    
+    private func mapWeatherCondition(_ condition: WeatherKit.WeatherCondition) -> WeatherCondition {
+        switch condition {
+        case .clear:
+            return .sunny
+        case .mostlyClear, .partlyCloudy:
+            return .partlyCloudy
+        case .cloudy:
+            return .cloudy
+        case .rain, .drizzle:
+            return .rainy
+        case .snow, .sleet, .blizzard:
+            return .snowy
+        default:
+            return .partlyCloudy
+        }
     }
     
     private func simulateWeatherFetch() async {
@@ -2464,7 +2593,7 @@ class WeatherService: ObservableObject {
         lastUpdated = Date()
     }
     
-    private func setDefaultWeather() {
+    func setDefaultWeather() {
         let now = Date()
         let hour = Calendar.current.component(.hour, from: now)
         let month = Calendar.current.component(.month, from: now)
@@ -2578,6 +2707,22 @@ private class WeatherLocationDelegate: NSObject, CLLocationManagerDelegate {
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         Task { @MainActor in
             service?.requestLocationPermission()
+        }
+    }
+    
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let location = locations.last else { return }
+        
+        Task { @MainActor in
+            service?.currentLocation = location
+            service?.updateWeatherIfNeeded()
+        }
+    }
+    
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        Task { @MainActor in
+            service?.errorMessage = "Location error: \(error.localizedDescription)"
+            service?.setDefaultWeather()
         }
     }
 }

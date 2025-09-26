@@ -395,19 +395,16 @@ struct ComprehensivePillarCreatorSheet: View {
                         }
                     }
                     
-                    // Goal relation
+                    // AI will automatically connect pillars to relevant goals
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Goal Connection")
+                        Text("AI Connections")
                                 .font(.headline)
                                 .fontWeight(.semibold)
-                            
-                        Picker("Related goal", selection: $relatedGoalId) {
-                            Text("No goal connection").tag(nil as UUID?)
-                            ForEach(dataManager.appState.goals) { goal in
-                                Text(goal.title).tag(goal.id as UUID?)
-                            }
-                        }
-                        .pickerStyle(.menu)
+                        
+                        Text("The AI will automatically connect this pillar to relevant goals based on content analysis and your usage patterns.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.bottom, 4)
                     }
                     
                     // AI suggestions
@@ -669,6 +666,22 @@ struct EnhancedPillarCard: View {
                         .foregroundStyle(.secondary)
                         .fontWeight(.medium)
                 }
+                
+                // AI connections to goals
+                if let connectedGoal = connectedGoal {
+                    HStack(spacing: 4) {
+                        Text(connectedGoal.emoji)
+                            .font(.caption2)
+                        Text(connectedGoal.title)
+                            .font(.caption2)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.blue.opacity(0.15), in: Capsule())
+                    .foregroundStyle(.blue)
+                }
             }
         }
         .buttonStyle(.plain)
@@ -707,6 +720,11 @@ struct EnhancedPillarCard: View {
 
     private var isEmphasized: Bool {
         dataManager.isPillarEmphasized(pillar.id)
+    }
+    
+    private var connectedGoal: Goal? {
+        guard let goalId = pillar.relatedGoalId else { return nil }
+        return dataManager.appState.goals.first { $0.id == goalId }
     }
     
     private var backgroundShape: some ShapeStyle {

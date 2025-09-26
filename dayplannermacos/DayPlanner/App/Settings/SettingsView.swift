@@ -300,13 +300,18 @@ struct AITrustSettingsView: View {
                             HStack {
                                 Text("Model:")
                                     .frame(width: 120, alignment: .leading)
-                                TextField("gpt-4o-mini", text: $openaiModel)
-                                    .textFieldStyle(.roundedBorder)
-                                    .onChange(of: openaiModel) { _, newValue in
-                                        dataManager.appState.preferences.openaiModel = newValue
-                                        dataManager.save()
-                                        aiService.configure(with: dataManager.appState.preferences)
+                                Picker("Model", selection: $openaiModel) {
+                                    ForEach(OpenAIModel.allCases) { model in
+                                        Text(model.displayName).tag(model.rawValue)
                                     }
+                                }
+                                .pickerStyle(.menu)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .onChange(of: openaiModel) { _, newValue in
+                                    dataManager.appState.preferences.openaiModel = newValue
+                                    dataManager.save()
+                                    aiService.configure(with: dataManager.appState.preferences)
+                                }
                             }
                         }
                     }
@@ -632,11 +637,8 @@ struct PillarsRulesSettingsView: View {
             }
         }
         .sheet(item: $selectedPillar) { pillar in
-            PillarEditView(pillar: pillar) { updatedPillar in
-                if let index = dataManager.appState.pillars.firstIndex(where: { $0.id == pillar.id }) {
-                    dataManager.appState.pillars[index] = updatedPillar
-                    dataManager.save()
-                }
+            ComprehensivePillarEditorSheet(pillar: pillar) { updatedPillar in
+                dataManager.updatePillar(updatedPillar)
                 selectedPillar = nil
             }
         }
@@ -1197,62 +1199,7 @@ struct SettingsGroup<Content: View>: View {
     }
 }
 
-struct PillarEditView: View {
-    let pillar: Pillar
-    let onSave: (Pillar) -> Void
-    
-    @State private var name: String
-    @State private var description: String
-    @State private var frequency: PillarFrequency
-    @Environment(\.dismiss) private var dismiss
-    
-    init(pillar: Pillar, onSave: @escaping (Pillar) -> Void) {
-        self.pillar = pillar
-        self.onSave = onSave
-        self._name = State(initialValue: pillar.name)
-        self._description = State(initialValue: pillar.description)
-        self._frequency = State(initialValue: pillar.frequency)
-    }
-    
-    var body: some View {
-        NavigationView {
-            Form {
-                Section("Details") {
-                    TextField("Name", text: $name)
-                    TextField("Description", text: $description)
-                }
-                
-                Section("Frequency") {
-                    Picker("Frequency", selection: $frequency) {
-                        ForEach(PillarFrequency.allCases, id: \.self) { freq in
-                            Text(freq.displayName).tag(freq)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                }
-            }
-            .navigationTitle("Edit Pillar")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-                
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        var updatedPillar = pillar
-                        updatedPillar.name = name
-                        updatedPillar.description = description
-                        updatedPillar.frequency = frequency
-                        onSave(updatedPillar)
-                    }
-                }
-            }
-        }
-        .frame(width: 500, height: 600)
-    }
-}
+// PillarEditView removed - using ComprehensivePillarEditorSheet for consistency
 
 struct ChainEditView: View {
     let chain: Chain

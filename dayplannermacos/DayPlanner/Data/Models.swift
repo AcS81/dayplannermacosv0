@@ -789,6 +789,45 @@ enum AIProvider: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+enum OpenAIModel: String, Codable, CaseIterable, Identifiable {
+    case gpt5 = "gpt-5"
+    case gpt5Mini = "gpt-5-mini"
+    case gpt5Nano = "gpt-5-nano"
+    case gpt4o = "gpt-4o"
+    case gpt4oMini = "gpt-4o-mini"
+    case gpt4Turbo = "gpt-4-turbo"
+    case gpt35Turbo = "gpt-3.5-turbo"
+    case gpt4 = "gpt-4"
+    
+    var id: String { rawValue }
+    
+    var displayName: String {
+        switch self {
+        case .gpt5: return "GPT-5 (Next Gen)"
+        case .gpt5Mini: return "GPT-5 Mini (Fast & Smart)"
+        case .gpt5Nano: return "GPT-5 Nano (Ultra Fast)"
+        case .gpt4o: return "GPT-4o (Latest)"
+        case .gpt4oMini: return "GPT-4o Mini (Fast & Cheap)"
+        case .gpt4Turbo: return "GPT-4 Turbo"
+        case .gpt35Turbo: return "GPT-3.5 Turbo"
+        case .gpt4: return "GPT-4"
+        }
+    }
+    
+    var description: String {
+        switch self {
+        case .gpt5: return "Next generation model with advanced reasoning and multimodal capabilities"
+        case .gpt5Mini: return "Balanced performance and speed, great for most applications"
+        case .gpt5Nano: return "Ultra-fast responses, perfect for real-time applications"
+        case .gpt4o: return "Most capable model, best for complex tasks"
+        case .gpt4oMini: return "Fast and cost-effective, good for most tasks"
+        case .gpt4Turbo: return "High performance, good balance of speed and capability"
+        case .gpt35Turbo: return "Fast and efficient, good for simple tasks"
+        case .gpt4: return "High quality responses, slower than newer models"
+        }
+    }
+}
+
 struct SuggestionWeighting: Codable {
     var pinBoost: Double = 0.25
     var pillarBoost: Double = 0.15

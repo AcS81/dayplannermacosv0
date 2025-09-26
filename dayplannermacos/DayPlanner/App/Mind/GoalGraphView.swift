@@ -181,7 +181,7 @@ struct EnhancedGoalCreatorSheet: View {
     @State private var importance = 3
     @State private var selectedState: GoalState = .draft
     @State private var selectedEmoji = "🎯"
-    @State private var relatedPillarIds: [UUID] = []
+    // AI will automatically connect goals to relevant pillars
     @State private var aiSuggestions = ""
     @State private var isGeneratingAI = false
     @State private var targetDate: Date?
@@ -338,7 +338,7 @@ struct EnhancedGoalCreatorSheet: View {
             groups: [],
             targetDate: hasTargetDate ? targetDate : nil,
             emoji: selectedEmoji,
-            relatedPillarIds: relatedPillarIds
+            relatedPillarIds: [] // AI will automatically connect
         )
         
         onGoalCreated(newGoal)
