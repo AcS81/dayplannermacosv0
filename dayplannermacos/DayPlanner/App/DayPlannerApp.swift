@@ -202,17 +202,7 @@ struct ContentView: View {
             setupAppAppearance()
             // Connect pattern engine to AI service
             aiService.setPatternEngine(dataManager.patternEngine)
-        }
-    }
-    
-    private func setupAppAppearance() {
-        // Configure the app's visual appearance
-        if let window = NSApplication.shared.windows.first {
-            window.isMovableByWindowBackground = false // Prevent window drag interference
-            window.titlebarAppearsTransparent = true
-            window.backgroundColor = NSColor.clear
-        }
-        .onAppear {
+            // Configure AI service immediately on app startup
             aiService.configure(with: dataManager.appState.preferences)
         }
         .onChange(of: dataManager.appState.preferences.aiProvider) { _, _ in
@@ -226,6 +216,15 @@ struct ContentView: View {
         }
         .onChange(of: dataManager.appState.preferences.openaiModel) { _, _ in
             aiService.configure(with: dataManager.appState.preferences)
+        }
+    }
+    
+    private func setupAppAppearance() {
+        // Configure the app's visual appearance
+        if let window = NSApplication.shared.windows.first {
+            window.isMovableByWindowBackground = false // Prevent window drag interference
+            window.titlebarAppearsTransparent = true
+            window.backgroundColor = NSColor.clear
         }
     }
 }
