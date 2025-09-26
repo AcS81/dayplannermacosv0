@@ -71,6 +71,13 @@ private struct DateFormatters {
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter
     }()
+
+    static let shortTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        return formatter
+    }()
 }
 
 /// Simple, local-first data manager
@@ -105,6 +112,9 @@ class AppDataManager: ObservableObject {
     @Published private(set) var pendingMicroUpdateReasons: [MicroUpdateReason] = []
     @Published var diagnosticsGhostOverrideActive = false
     private var cancellables: Set<AnyCancellable> = []
+
+    private let ghostRejectionTolerance: TimeInterval = 15 * 60
+    private let baseGhostCooldown: TimeInterval = 30 * 60
 
     func requestMicroUpdate(_ reason: MicroUpdateReason) {
         if !pendingMicroUpdateReasons.contains(reason) {
@@ -376,10 +386,27 @@ class AppDataManager: ObservableObject {
     // MARK: - Time Block Operations
     
     func addTimeBlock(_ block: TimeBlock) {
-        withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
-            appState.addBlock(block)
+        let calendar = Calendar.current
+        let blockDay = calendar.startOfDay(for: block.startTime)
+        let isForCurrentDay = calendar.isDate(block.startTime, inSameDayAs: appState.currentDay.date)
+
+        if isForCurrentDay {
+            withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+                appState.addBlock(block)
+            }
+        } else {
+            if let index = appState.historicalDays.firstIndex(where: { calendar.isDate($0.date, inSameDayAs: block.startTime) }) {
+                var day = appState.historicalDays[index]
+                day.blocks.append(block)
+                day.blocks.sort { $0.startTime < $1.startTime }
+                appState.historicalDays[index] = day
+            } else {
+                let newDay = Day(date: blockDay, blocks: [block])
+                appState.historicalDays.append(newDay)
+            }
+            appState.historicalDays.sort { $0.date < $1.date }
         }
-        
+
         // Record for pattern learning
         let creationSource: String
         switch block.origin {
@@ -391,18 +418,21 @@ class AppDataManager: ObservableObject {
         case .manual: creationSource = "manual"
         }
         recordTimeBlockCreation(block, source: creationSource)
-        
+
         // Award XXP for productive actions
         if block.energy == .sunrise || block.energy == .daylight {
             appState.addXXP(Int(block.duration / 60), reason: "Added productive time block")
         }
-        
-        refreshPastBlocks()
-        save()
-        if block.origin != .external {
-            onboardingDelegate?.onboardingDidCreateBlock(block, acceptedSuggestion: block.origin == .suggestion)
+
+        if isForCurrentDay {
+            refreshPastBlocks()
+            if block.origin != .external {
+                onboardingDelegate?.onboardingDidCreateBlock(block, acceptedSuggestion: block.origin == .suggestion)
+            }
         }
-        
+
+        save()
+
         // Trigger insight refresh
         // insightsEngine?.checkForUpdates()
     }
@@ -652,16 +682,28 @@ class AppDataManager: ObservableObject {
         var didUpdate = false
         for index in appState.currentDay.blocks.indices {
             var block = appState.currentDay.blocks[index]
-            if block.endTime <= referenceDate && block.confirmationState == .scheduled {
-                block.confirmationState = .unconfirmed
-                if block.glassState == .solid {
-                    block.glassState = .liquid
+            if block.endTime <= referenceDate {
+                let confirmationTime = referenceDate
+                let metadata = confirmationMetadata(for: block, confirmedAt: confirmationTime, style: .automatic)
+                let mergedNotes = mergeNotes(existing: block.notes, newUserNote: nil, metadata: metadata)
+                if mergedNotes != (block.notes ?? "") {
+                    block.notes = mergedNotes
+                    didUpdate = true
                 }
-                if block.glassState == .crystal {
-                    block.glassState = .mist
+                if block.confirmationState != .confirmed {
+                    block.confirmationState = .confirmed
+                    block.glassState = .solid
+                    didUpdate = true
                 }
                 appState.currentDay.blocks[index] = block
-                didUpdate = true
+                if upsertRecord(for: block, confirmedAt: confirmationTime) {
+                    didUpdate = true
+                }
+                let previousTodoCount = appState.todoItems.count
+                appState.todoItems.removeAll { $0.followUp?.blockId == block.id }
+                if appState.todoItems.count != previousTodoCount {
+                    didUpdate = true
+                }
             } else if block.startTime > referenceDate && block.confirmationState == .unconfirmed {
                 block.confirmationState = .scheduled
                 appState.currentDay.blocks[index] = block
@@ -686,27 +728,23 @@ class AppDataManager: ObservableObject {
     func confirmBlock(_ blockId: UUID, notes: String? = nil) {
         guard let index = appState.currentDay.blocks.firstIndex(where: { $0.id == blockId }) else { return }
         var block = appState.currentDay.blocks[index]
+        let confirmationTime = Date()
         let trimmedNotes = notes?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let trimmedNotes, !trimmedNotes.isEmpty {
-            block.notes = trimmedNotes
-        }
+        let metadata = confirmationMetadata(for: block, confirmedAt: confirmationTime, style: .manual)
+        block.notes = mergeNotes(existing: block.notes, newUserNote: trimmedNotes, metadata: metadata)
         block.confirmationState = .confirmed
         block.glassState = .solid
         appState.currentDay.blocks[index] = block
-        
-        let record = Record(
-            blockId: block.id,
-            title: block.title,
-            startTime: block.startTime,
-            endTime: block.endTime,
-            notes: block.notes,
-            energy: block.energy,
-            emoji: block.emoji,
-            confirmedAt: Date()
-        )
-        appState.records.append(record)
+
+        var needsSave = upsertRecord(for: block, confirmedAt: confirmationTime)
+        let previousTodoCount = appState.todoItems.count
         appState.todoItems.removeAll { $0.followUp?.blockId == block.id }
-        save()
+        if appState.todoItems.count != previousTodoCount {
+            needsSave = true
+        }
+        if needsSave {
+            save()
+        }
     }
     
     func undoRecord(_ recordId: UUID) {
@@ -753,6 +791,143 @@ class AppDataManager: ObservableObject {
         appState.todoItems.removeAll { $0.followUp?.blockId == block.id }
         appState.todoItems.insert(item, at: 0)
         save()
+    }
+
+    private enum ConfirmationStyle {
+        case manual
+        case automatic
+    }
+
+    private func mergeNotes(existing: String?, newUserNote: String?, metadata: String) -> String {
+        var lines: [String] = []
+        func appendIfNeeded(_ candidate: String?) {
+            guard let text = candidate?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return }
+            if !lines.contains(text) {
+                lines.append(text)
+            }
+        }
+        appendIfNeeded(newUserNote)
+        appendIfNeeded(existing)
+        appendIfNeeded(metadata)
+        return lines.joined(separator: "\n")
+    }
+
+    private func confirmationMetadata(for block: TimeBlock, confirmedAt: Date, style: ConfirmationStyle) -> String {
+        let timeString = DateFormatters.shortTimeFormatter.string(from: confirmedAt)
+        let weatherSummary = weatherService.getWeatherContext()
+        switch style {
+        case .manual:
+            return "🔒 Confirmed by you at \(timeString) for \(block.title). \(weatherSummary)"
+        case .automatic:
+            return "🔒 Auto-confirmed at \(timeString) for \(block.title). \(weatherSummary)"
+        }
+    }
+
+    @discardableResult
+    private func upsertRecord(for block: TimeBlock, confirmedAt: Date) -> Bool {
+        if let index = appState.records.firstIndex(where: { $0.blockId == block.id }) {
+            var record = appState.records[index]
+            let cleanedNotes = block.notes?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let existingNotes = record.notes?.trimmingCharacters(in: .whitespacesAndNewlines)
+            var didChange = false
+            if cleanedNotes != existingNotes {
+                record.notes = block.notes
+                didChange = true
+            }
+            if record.confirmedAt != confirmedAt {
+                record.confirmedAt = confirmedAt
+                didChange = true
+            }
+            appState.records[index] = record
+            return didChange
+        } else {
+            let record = Record(
+                blockId: block.id,
+                title: block.title,
+                startTime: block.startTime,
+                endTime: block.endTime,
+                notes: block.notes,
+                energy: block.energy,
+                emoji: block.emoji,
+                confirmedAt: confirmedAt
+            )
+            appState.records.append(record)
+            return true
+        }
+    }
+
+    // MARK: - Ghost Rejection Tracking
+
+    func registerGhostRejection(for suggestion: Suggestion) {
+        pruneGhostRejections()
+        let calendar = Calendar.current
+        let dayStart = calendar.startOfDay(for: suggestion.suggestedTime)
+        if let index = findGhostRejectionIndex(for: dayStart, near: suggestion.suggestedTime) {
+            var rejection = appState.ghostRejections[index]
+            rejection.rejectionCount += 1
+            rejection.rejectedAt = Date()
+            rejection.slotStart = suggestion.suggestedTime
+            rejection.duration = suggestion.duration
+            rejection.title = suggestion.title
+            appState.ghostRejections[index] = rejection
+        } else {
+            let rejection = GhostRejection(
+                day: dayStart,
+                slotStart: suggestion.suggestedTime,
+                duration: suggestion.duration,
+                title: suggestion.title,
+                rejectedAt: Date()
+            )
+            appState.ghostRejections.append(rejection)
+        }
+        save()
+    }
+
+    func clearGhostRejection(for suggestion: Suggestion) {
+        let calendar = Calendar.current
+        let dayStart = calendar.startOfDay(for: suggestion.suggestedTime)
+        if let index = findGhostRejectionIndex(for: dayStart, near: suggestion.suggestedTime) {
+            appState.ghostRejections.remove(at: index)
+            save()
+        }
+    }
+
+    func adjustedGhostStartTime(for day: Date, proposedStart: Date, duration: TimeInterval, gapEnd: Date) -> Date? {
+        pruneGhostRejections()
+        let calendar = Calendar.current
+        let dayStart = calendar.startOfDay(for: day)
+        _ = duration
+        guard let index = findGhostRejectionIndex(for: dayStart, near: proposedStart) else {
+            return proposedStart
+        }
+        let rejection = appState.ghostRejections[index]
+        let multiplier = Double(min(4, max(1, rejection.rejectionCount)))
+        let cooldown = baseGhostCooldown * multiplier
+        let resumeTime = rejection.rejectedAt.addingTimeInterval(cooldown)
+        if resumeTime <= proposedStart {
+            return proposedStart
+        }
+        let adjusted = max(proposedStart, resumeTime)
+        if adjusted >= gapEnd { return nil }
+        return adjusted
+    }
+
+    private func findGhostRejectionIndex(for dayStart: Date, near start: Date) -> Int? {
+        let calendar = Calendar.current
+        return appState.ghostRejections.firstIndex { rejection in
+            calendar.isDate(rejection.day, inSameDayAs: dayStart) &&
+            abs(rejection.slotStart.timeIntervalSince(start)) <= ghostRejectionTolerance
+        }
+    }
+
+    private func pruneGhostRejections(referenceDate: Date = Date()) {
+        let calendar = Calendar.current
+        let cutoff = calendar.startOfDay(for: referenceDate.addingTimeInterval(-172_800))
+        let previousCount = appState.ghostRejections.count
+        appState.ghostRejections.removeAll { calendar.startOfDay(for: $0.day) < cutoff }
+        if appState.ghostRejections.count != previousCount {
+            save()
+        }
     }
     
     // MARK: - Chain Operations
@@ -2287,13 +2462,15 @@ class AppDataManager: ObservableObject {
     /// Enhanced applySuggestion with pattern learning
     func applySuggestion(_ suggestion: Suggestion) {
         var block = suggestion.toTimeBlock()
-        
+
         // Record that suggestion was accepted
         recordSuggestionFeedback(suggestion, accepted: true)
-        
+
         // Record the time block creation
         recordTimeBlockCreation(block, source: "ai_suggestion")
-        
+
+        clearGhostRejection(for: suggestion)
+
         addTimeBlock(block)
         
         // Award XP for using AI suggestions

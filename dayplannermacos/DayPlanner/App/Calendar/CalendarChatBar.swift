@@ -213,6 +213,9 @@ struct CalendarChatBar: View {
     }
     
     private func sendPlanningMessage(_ message: String) {
+        if respondToHistoryRequest(message) {
+            return
+        }
         isSending = true
         lastAIResponse = nil // Clear previous response
         Task {
@@ -269,6 +272,78 @@ struct CalendarChatBar: View {
                 refreshPrompt()
             }
         }
+    }
+
+    private func respondToHistoryRequest(_ message: String) -> Bool {
+        let lower = message.lowercased()
+        let triggers = [
+            "what have i done today",
+            "what did i do today",
+            "what have i done so far",
+            "what did i get done",
+            "what have i accomplished today"
+        ]
+        guard triggers.contains(where: { lower.contains($0) }) else { return false }
+        dataManager.refreshPastBlocks()
+        lastAIResponse = buildTodaySummary()
+        isSending = false
+        refreshPrompt()
+        return true
+    }
+
+    private func buildTodaySummary() -> String {
+        let calendar = Calendar.current
+        let dayDate = dataManager.appState.currentDay.date
+        let todaysRecords = dataManager.appState.records
+            .filter { calendar.isDate($0.startTime, inSameDayAs: dayDate) }
+            .sorted { $0.startTime < $1.startTime }
+
+        guard !todaysRecords.isEmpty else {
+            let pendingCount = dataManager.appState.currentDay.blocks.filter { $0.startTime > Date() }.count
+            if pendingCount > 0 {
+                return "Nothing has been logged yet today, but you still have \(pendingCount) upcoming block\(pendingCount == 1 ? "" : "s")."
+            } else {
+                return "I don't have any completed activities logged for today yet. Want me to schedule something?"
+            }
+        }
+
+        let totalMinutes = todaysRecords.reduce(0) { $0 + Int($1.duration / 60) }
+        let dayLabel = dayDate.formatted(date: .abbreviated, time: .omitted)
+        let header = "So far on \(dayLabel) you've completed \(todaysRecords.count) activit\(todaysRecords.count == 1 ? "y" : "ies") (\(totalMinutes) minutes total):"
+        let timeFormatter = DateFormatter()
+        timeFormatter.timeStyle = .short
+
+        let entries = todaysRecords.map { record -> String in
+            let start = timeFormatter.string(from: record.startTime)
+            let end = timeFormatter.string(from: record.endTime)
+            let duration = Int(record.duration / 60)
+            var line = "• \(start) – \(end): \(record.title) (\(duration)m)"
+            if let notes = record.notes?.split(separator: "\n"), !notes.isEmpty {
+                var noteParts: [String] = []
+                for rawLine in notes {
+                    let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else { continue }
+                    if trimmed.hasPrefix("🔒") {
+                        noteParts.append(trimmed)
+                    } else {
+                        noteParts.insert(trimmed, at: 0)
+                    }
+                }
+                if !noteParts.isEmpty {
+                    line += " – " + noteParts.joined(separator: " | ")
+                }
+            }
+            return line
+        }.joined(separator: "\n")
+
+        let remaining = dataManager.appState.currentDay.blocks.filter { $0.startTime > Date() }.count
+        let footer: String
+        if remaining > 0 {
+            footer = "\nNext up: \(remaining) scheduled block\(remaining == 1 ? "" : "s") still ahead."
+        } else {
+            footer = ""
+        }
+        return "\(header)\n\(entries)\(footer)"
     }
     
     private func handleTellMeChip() {

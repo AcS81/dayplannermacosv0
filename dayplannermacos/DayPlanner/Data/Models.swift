@@ -603,6 +603,35 @@ struct Suggestion: Identifiable, Codable {
     }
 }
 
+/// Tracks a rejected ghost suggestion to make future recommendations considerate.
+struct GhostRejection: Identifiable, Codable, Equatable {
+    var id: UUID = UUID()
+    var day: Date
+    var slotStart: Date
+    var duration: TimeInterval
+    var title: String
+    var rejectedAt: Date
+    var rejectionCount: Int = 1
+
+    init(
+        id: UUID = UUID(),
+        day: Date,
+        slotStart: Date,
+        duration: TimeInterval,
+        title: String,
+        rejectedAt: Date = Date(),
+        rejectionCount: Int = 1
+    ) {
+        self.id = id
+        self.day = day
+        self.slotStart = slotStart
+        self.duration = duration
+        self.title = title
+        self.rejectedAt = rejectedAt
+        self.rejectionCount = rejectionCount
+    }
+}
+
 /// Context for AI decision making
 struct DayContext: Codable {
     let date: Date
@@ -671,6 +700,7 @@ struct AppState: Codable {
     var todoItems: [TodoItem] = []
     var moodEntries: [MoodEntry] = []
     var onboarding: OnboardingState = OnboardingState()
+    var ghostRejections: [GhostRejection] = []
     
     // Scheduling emphasis and feedback signals
     var pinnedGoalIds: Set<UUID> = []

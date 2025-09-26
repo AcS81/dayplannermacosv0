@@ -691,66 +691,74 @@ struct ActionBarView: View {
         let lowercased = message.lowercased()
         let calendar = Calendar.current
         let now = Date()
-        
-        // Check for "today"
-        if lowercased.contains("today") {
-            return now
-        }
-        
-        // Check for "tomorrow"
+
+        var baseDate: Date?
+
         if lowercased.contains("tomorrow") {
-            return calendar.date(byAdding: .day, value: 1, to: now)
-        }
-        
-        // Check for "next week"
-        if lowercased.contains("next week") {
-            return calendar.date(byAdding: .weekOfYear, value: 1, to: now)
-        }
-        
-        // Check for day names (monday, tuesday, etc.)
-        let dayNames = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
-        for (index, dayName) in dayNames.enumerated() {
-            if lowercased.contains(dayName) {
-                let targetWeekday = index + 2 // Monday = 2 in Calendar.current
-                let adjustedWeekday = targetWeekday > 7 ? 1 : targetWeekday
-                
-                var components = DateComponents()
-                components.weekday = adjustedWeekday
-                
-                // Find next occurrence of this weekday
-                if let nextDate = calendar.nextDate(after: now, matching: components, matchingPolicy: .nextTime) {
-                    return nextDate
+            baseDate = calendar.date(byAdding: .day, value: 1, to: now)
+        } else if lowercased.contains("next week") {
+            baseDate = calendar.date(byAdding: .weekOfYear, value: 1, to: now)
+        } else if lowercased.contains("today") {
+            baseDate = now
+        } else {
+            let dayNames = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+            for (index, dayName) in dayNames.enumerated() {
+                if lowercased.contains(dayName) {
+                    var components = DateComponents()
+                    components.weekday = index + 2
+                    if let nextDate = calendar.nextDate(after: now, matching: components, matchingPolicy: .nextTime) {
+                        baseDate = nextDate
+                        break
+                    }
                 }
             }
         }
-        
-        // Check for time patterns like "at 3pm", "at 15:00"
-        let timeRegex = try? NSRegularExpression(pattern: "at\\s+(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)?", options: .caseInsensitive)
+
+        if baseDate == nil {
+            baseDate = now
+        }
+
+        var components = calendar.dateComponents([.year, .month, .day], from: baseDate ?? now)
+        var didSetTime = false
+        let timeRegex = try? NSRegularExpression(pattern: "(?:\bat\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", options: .caseInsensitive)
         if let regex = timeRegex {
             let range = NSRange(location: 0, length: message.count)
-            if let match = regex.firstMatch(in: message, options: [], range: range) {
-                let hourRange = match.range(at: 1)
-                let minuteRange = match.range(at: 2)
-                let ampmRange = match.range(at: 3)
-                
-                if let hourString = Range(hourRange, in: message).map({ String(message[$0]) }),
-                   let hour = Int(hourString) {
-                    
-                    let minute = minuteRange.location != NSNotFound ? 
-                        Range(minuteRange, in: message).map({ Int(String(message[$0])) }) ?? 0 : 0
-                    
-                    let isPM = ampmRange.location != NSNotFound ? 
-                        Range(ampmRange, in: message).map({ String(message[$0]).lowercased() == "pm" }) ?? false : false
-                    
-                    let adjustedHour = isPM && hour != 12 ? hour + 12 : (hour == 12 && !isPM ? 0 : hour)
-                    
-                    return calendar.date(bySettingHour: adjustedHour, minute: minute ?? 0, second: 0, of: now)
+            if let match = regex.firstMatch(in: message, options: [], range: range),
+               let hourRange = Range(match.range(at: 1), in: message) {
+                let hourValue = Int(message[hourRange]) ?? 0
+                let minuteValue: Int
+                if let minuteRange = Range(match.range(at: 2), in: message) {
+                    minuteValue = Int(message[minuteRange]) ?? 0
+                } else {
+                    minuteValue = 0
                 }
+
+                var adjustedHour = hourValue
+                if let ampmRange = Range(match.range(at: 3), in: message) {
+                    let ampm = message[ampmRange].lowercased()
+                    if ampm == "pm" && hourValue != 12 {
+                        adjustedHour = hourValue + 12
+                    } else if ampm == "am" && hourValue == 12 {
+                        adjustedHour = 0
+                    }
+                } else if hourValue < 8 && lowercased.contains("evening") {
+                    adjustedHour = hourValue + 12
+                }
+
+                components.hour = adjustedHour
+                components.minute = minuteValue
+                components.second = 0
+                didSetTime = true
             }
         }
-        
-        // Default to current time if no specific date/time found
-        return nil
+
+        if !didSetTime {
+            let fallbackComponents = calendar.dateComponents([.hour, .minute], from: baseDate ?? now)
+            components.hour = fallbackComponents.hour
+            components.minute = fallbackComponents.minute
+        }
+
+        return calendar.date(from: components)
     }
     
     private func findNextAvailableTime(after startTime: Date) -> Date {
