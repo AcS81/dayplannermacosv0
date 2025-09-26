@@ -11,7 +11,10 @@ struct CalendarPanelHeader: View {
     let showBadges: Bool
     let isDefaultMonthView: Bool // Track if month view is shown by default
     let onBackToCalendar: (() -> Void)? // Callback to return to calendar view
-    
+
+    @State private var previousDate: Date?
+    @State private var transitionEdge: Edge = .trailing
+
     private var dateFormatter: DateFormatter {
         let formatter = DateFormatter()
         formatter.dateFormat = "EEEE, MMMM d"
@@ -36,12 +39,17 @@ struct CalendarPanelHeader: View {
                             )
                     }
                     .buttonStyle(.plain)
-                    
-                    Text(dateFormatter.string(from: selectedDate))
-                        .font(.title2)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.primary)
-                    
+
+                    ZStack {
+                        Text(dateFormatter.string(from: selectedDate))
+                            .font(.title2)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.primary)
+                            .id(calendar.startOfDay(for: selectedDate))
+                            .transition(dayTransition(for: transitionEdge))
+                    }
+                    .animation(.spring(response: 0.45, dampingFraction: 0.85), value: selectedDate)
+
                     Button(action: nextDay) {
                         Image(systemName: "chevron.right")
                             .font(.subheadline)
@@ -149,8 +157,23 @@ struct CalendarPanelHeader: View {
         )
         .padding(.horizontal, 16)
         .padding(.top, 8)
+        .onAppear {
+            previousDate = selectedDate
+        }
+        .onChange(of: selectedDate) { newValue in
+            let normalizedNew = calendar.startOfDay(for: newValue)
+            if let previous = previousDate {
+                let comparison = calendar.compare(normalizedNew, to: calendar.startOfDay(for: previous), toGranularity: .day)
+                if comparison == .orderedDescending {
+                    transitionEdge = .trailing
+                } else if comparison == .orderedAscending {
+                    transitionEdge = .leading
+                }
+            }
+            previousDate = newValue
+        }
     }
-    
+
     private func previousDay() {
         withAnimation(.easeInOut(duration: 0.3)) {
             selectedDate = Calendar.current.date(byAdding: .day, value: -1, to: selectedDate) ?? selectedDate
@@ -165,9 +188,19 @@ struct CalendarPanelHeader: View {
 }
 
 extension CalendarPanelHeader {
+    private var calendar: Calendar { Calendar.current }
+
     private func toggleRecommendations() {
         withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) {
             showingRecommendations.toggle()
         }
+    }
+
+    private func dayTransition(for edge: Edge) -> AnyTransition {
+        let removalEdge: Edge = edge == .leading ? .trailing : .leading
+        return .asymmetric(
+            insertion: .move(edge: edge).combined(with: .opacity),
+            removal: .move(edge: removalEdge).combined(with: .opacity)
+        )
     }
 }

@@ -50,14 +50,22 @@ struct EnhancedDayView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            // Proportional timeline view where duration = visual height
-            ScrollView {
+            InfiniteTimelineScroll(
+                selectedDate: $selectedDate,
+                minuteHeight: minuteHeight,
+                isScrollDisabled: draggedBlock != nil
+            ) { date, isActiveDay in
                 ProportionalTimelineView(
-                    selectedDate: selectedDate,
-                    blocks: allBlocksForDay,
-                    draggedBlock: draggedBlock,
+                    selectedDate: date,
+                    blocks: blocks(for: date),
+                    draggedBlock: isActiveDay ? draggedBlock : nil,
                     minuteHeight: minuteHeight,
                     onTap: { time in
+                        if !Calendar.current.isDate(date, inSameDayAs: selectedDate) {
+                            withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) {
+                                selectedDate = Calendar.current.startOfDay(for: date)
+                            }
+                        }
                         creationTime = time
                         showingBlockCreation = true
                     },
@@ -65,21 +73,24 @@ struct EnhancedDayView: View {
                         draggedBlock = block
                     },
                     onBlockDrop: { block, newTime in
+                        if !Calendar.current.isDate(newTime, inSameDayAs: selectedDate) {
+                            withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) {
+                                selectedDate = Calendar.current.startOfDay(for: newTime)
+                            }
+                        }
                         handleBlockDrop(block: block, newTime: newTime)
                         draggedBlock = nil
                     },
-                    showGhosts: showingRecommendations,
-                    ghostSuggestions: ghostSuggestions,
+                    showGhosts: isActiveDay && showingRecommendations,
+                    ghostSuggestions: isActiveDay ? ghostSuggestions : [],
                     dayStartHour: dayStartHour,
-                    selectedGhosts: $selectedGhostIDs,
-                    onGhostToggle: toggleGhostSelection
+                    dayEndHour: dayEndHour,
+                    selectedGhosts: isActiveDay ? $selectedGhostIDs : .constant([]),
+                    onGhostToggle: isActiveDay ? toggleGhostSelection : { _ in }
                 )
                 .padding(.trailing, 2)
-                .padding(.bottom, ghostAcceptanceInset)
-                .background(Color.clear)
+                .padding(.bottom, isActiveDay ? ghostAcceptanceInset : 0)
             }
-            .scrollIndicators(.hidden)
-            .scrollDisabled(draggedBlock != nil) // Disable scroll when dragging an event
         }
         .onChange(of: selectedDate) { oldValue, newValue in
             diagnosticsOverride = false
@@ -162,8 +173,17 @@ struct EnhancedDayView: View {
         }
     }
     
-    private var allBlocksForDay: [TimeBlock] {
-        dataManager.appState.currentDay.blocks.sorted { $0.startTime < $1.startTime }
+    private func blocks(for date: Date) -> [TimeBlock] {
+        let calendar = Calendar.current
+        if calendar.isDate(date, inSameDayAs: dataManager.appState.currentDay.date) {
+            return dataManager.appState.currentDay.blocks.sorted { $0.startTime < $1.startTime }
+        }
+
+        if let historicalDay = dataManager.appState.historicalDays.first(where: { calendar.isDate($0.date, inSameDayAs: date) }) {
+            return historicalDay.blocks.sorted { $0.startTime < $1.startTime }
+        }
+
+        return []
     }
     
     private func handleBlockDrop(block: TimeBlock, newTime: Date) {
@@ -218,6 +238,197 @@ struct EnhancedDayView: View {
         }
         
         updateAcceptanceInfo()
+    }
+}
+
+// MARK: - Infinite Timeline Support
+
+private struct InfiniteTimelineScroll<Content: View>: View {
+    @Binding var selectedDate: Date
+    let minuteHeight: CGFloat
+    let isScrollDisabled: Bool
+    let content: (Date, Bool) -> Content
+
+    @State private var displayedDates: [Date] = []
+    @State private var pendingScrollTarget: Date?
+    @State private var suppressExternalScroll = false
+
+    private let calendar = Calendar.current
+    private let coordinateSpaceName = "enhanced-day-timeline"
+
+    private var dayHeight: CGFloat { minuteHeight * 60 * 24 }
+
+    var body: some View {
+        GeometryReader { geometry in
+            ScrollViewReader { proxy in
+                ScrollView(.vertical) {
+                    LazyVStack(spacing: 0) {
+                        ForEach(displayedDates, id: \.self) { date in
+                            content(date, calendar.isDate(date, inSameDayAs: selectedDate))
+                                .background(
+                                    DayPositionReader(
+                                        date: date,
+                                        coordinateSpace: coordinateSpaceName
+                                    )
+                                )
+                                .id(date)
+                        }
+                    }
+                }
+                .coordinateSpace(name: coordinateSpaceName)
+                .scrollIndicators(.hidden)
+                .scrollDisabled(isScrollDisabled)
+                .onPreferenceChange(DayOffsetPreferenceKey.self) { values in
+                    handleOffsets(values, containerHeight: geometry.size.height)
+                }
+                .onAppear {
+                    if displayedDates.isEmpty {
+                        displayedDates = initialDates(around: selectedDate)
+                        pendingScrollTarget = calendar.startOfDay(for: selectedDate)
+                    }
+                    scrollIfNeeded(using: proxy)
+                }
+                .onChange(of: displayedDates) { _ in
+                    scrollIfNeeded(using: proxy)
+                }
+                .onChange(of: selectedDate) { newValue in
+                    guard !suppressExternalScroll else {
+                        suppressExternalScroll = false
+                        return
+                    }
+                    let normalized = calendar.startOfDay(for: newValue)
+                    pendingScrollTarget = normalized
+                    displayedDates = initialDates(around: normalized)
+                }
+            }
+        }
+    }
+
+    private func initialDates(around date: Date) -> [Date] {
+        let normalized = calendar.startOfDay(for: date)
+        return (-2...2).compactMap { offset in
+            calendar.date(byAdding: .day, value: offset, to: normalized)
+        }
+    }
+
+    private func scrollIfNeeded(using proxy: ScrollViewProxy) {
+        guard let target = pendingScrollTarget else { return }
+        guard containsDate(target) else { return }
+        pendingScrollTarget = nil
+        DispatchQueue.main.async {
+            proxy.scrollTo(target, anchor: .top)
+        }
+    }
+
+    private func containsDate(_ date: Date) -> Bool {
+        displayedDates.contains { calendar.isDate($0, inSameDayAs: date) }
+    }
+
+    private func handleOffsets(_ values: [Date: CGFloat], containerHeight: CGFloat) {
+        guard !values.isEmpty else { return }
+        let threshold = containerHeight / 3
+
+        if let active = activeDate(from: values, threshold: threshold) {
+            if !calendar.isDate(active, inSameDayAs: selectedDate) {
+                setActiveDate(active)
+            }
+        }
+
+        extendIfNeeded(values, containerHeight: containerHeight)
+        trimIfNeeded(values, containerHeight: containerHeight)
+    }
+
+    private func activeDate(from values: [Date: CGFloat], threshold: CGFloat) -> Date? {
+        let sorted = values.sorted { $0.value < $1.value }
+        for (date, offset) in sorted {
+            let maxY = offset + dayHeight
+            if offset <= threshold && threshold < maxY {
+                return date
+            }
+        }
+        return sorted.min(by: { abs($0.value - threshold) < abs($1.value - threshold) })?.key
+    }
+
+    private func setActiveDate(_ date: Date) {
+        let normalized = calendar.startOfDay(for: date)
+        guard !calendar.isDate(normalized, inSameDayAs: selectedDate) else { return }
+        suppressExternalScroll = true
+        let current = calendar.startOfDay(for: selectedDate)
+        let comparison = calendar.compare(normalized, to: current, toGranularity: .day)
+        let edgeAnimation = Animation.spring(response: 0.5, dampingFraction: 0.85)
+        withAnimation(edgeAnimation) {
+            selectedDate = normalized
+        }
+        if comparison == .orderedDescending {
+            // Ensure future days are ready ahead of the user
+            if let last = displayedDates.max(), let next = calendar.date(byAdding: .day, value: 1, to: last) {
+                appendDateIfNeeded(next)
+            }
+        }
+    }
+
+    private func extendIfNeeded(_ values: [Date: CGFloat], containerHeight: CGFloat) {
+        guard let first = displayedDates.min(), let last = displayedDates.max() else { return }
+
+        if let firstOffset = values[first], firstOffset > -containerHeight * 0.5 {
+            if let previous = calendar.date(byAdding: .day, value: -1, to: first) {
+                prependDateIfNeeded(previous)
+            }
+        }
+
+        if let lastOffset = values[last], lastOffset < containerHeight * 1.5 {
+            if let next = calendar.date(byAdding: .day, value: 1, to: last) {
+                appendDateIfNeeded(next)
+            }
+        }
+    }
+
+    private func trimIfNeeded(_ values: [Date: CGFloat], containerHeight: CGFloat) {
+        let lowerBound = -containerHeight * 3
+        let upperBound = containerHeight * 3 + dayHeight
+        let target = pendingScrollTarget
+
+        displayedDates.removeAll { date in
+            if calendar.isDate(date, inSameDayAs: selectedDate) { return false }
+            if let target, calendar.isDate(date, inSameDayAs: target) { return false }
+            guard let offset = values[date] else { return false }
+            return (offset + dayHeight) < lowerBound || offset > upperBound
+        }
+    }
+
+    private func appendDateIfNeeded(_ date: Date) {
+        guard !containsDate(date) else { return }
+        displayedDates.append(calendar.startOfDay(for: date))
+        displayedDates.sort()
+    }
+
+    private func prependDateIfNeeded(_ date: Date) {
+        guard !containsDate(date) else { return }
+        displayedDates.append(calendar.startOfDay(for: date))
+        displayedDates.sort()
+    }
+}
+
+private struct DayPositionReader: View {
+    let date: Date
+    let coordinateSpace: String
+
+    var body: some View {
+        GeometryReader { proxy in
+            Color.clear
+                .preference(
+                    key: DayOffsetPreferenceKey.self,
+                    value: [date: proxy.frame(in: .named(coordinateSpace)).minY]
+                )
+        }
+    }
+}
+
+private struct DayOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue: [Date: CGFloat] = [:]
+
+    static func reduce(value: inout [Date: CGFloat], nextValue: () -> [Date: CGFloat]) {
+        value.merge(nextValue()) { $1 }
     }
 }
 
