@@ -738,7 +738,6 @@ This document is auto-generated to outline the primary declarations in each Swif
 
 ### EnhancedDayView.swift
 - L5: `struct GhostAcceptanceInfo`
-- L16: `struct GhostAcceptancePreferenceKey`
 - L27: `struct EnhancedDayView`
 - L167: `func handleBlockDrop`
 - L187: `func makeDiagnosticsSuggestions`

@@ -58,7 +58,8 @@ struct CalendarPanel: View {
                 EnhancedDayView(
                     selectedDate: $selectedDate,
                     ghostSuggestions: $ghostSuggestions,
-                    showingRecommendations: $showingRecommendations
+                    showingRecommendations: $showingRecommendations,
+                    onAcceptanceInfoChange: handleGhostAcceptanceInfo
                 )
                     .frame(maxHeight: showingTodoList ? nil : .infinity)
                     .transition(.asymmetric(
@@ -105,15 +106,6 @@ struct CalendarPanel: View {
             .padding(.horizontal, 32)
             .padding(.bottom, 24) // Increased from 18 to 24 for more breathing room
         }
-        .onPreferenceChange(GhostAcceptancePreferenceKey.self) { info in
-            if reduceMotion {
-                ghostAcceptanceInfo = info
-            } else {
-                withAnimation(.spring(response: 0.6, dampingFraction: 0.85)) {
-                    ghostAcceptanceInfo = info
-                }
-            }
-        }
         .onChange(of: showingRecommendations) { _, enabled in
             if !enabled {
                 ghostAcceptanceInfo = nil
@@ -122,6 +114,18 @@ struct CalendarPanel: View {
         .onChange(of: showingMonthView) { _, isMonth in
             if isMonth {
                 ghostAcceptanceInfo = nil
+            }
+        }
+    }
+}
+
+private extension CalendarPanel {
+    func handleGhostAcceptanceInfo(_ info: GhostAcceptanceInfo?) {
+        if reduceMotion {
+            ghostAcceptanceInfo = info
+        } else {
+            withAnimation(.spring(response: 0.6, dampingFraction: 0.85)) {
+                ghostAcceptanceInfo = info
             }
         }
     }

@@ -13,17 +13,6 @@ struct GhostAcceptanceInfo: Equatable {
     }
 }
 
-struct GhostAcceptancePreferenceKey: PreferenceKey {
-    static var defaultValue: GhostAcceptanceInfo? = nil
-    static func reduce(value: inout GhostAcceptanceInfo?, nextValue: () -> GhostAcceptanceInfo?) {
-        if let update = nextValue() {
-            value = update
-        } else {
-            value = nil
-        }
-    }
-}
-
 struct EnhancedDayView: View {
     @EnvironmentObject private var dataManager: AppDataManager
     @EnvironmentObject private var aiService: AIService
@@ -37,6 +26,7 @@ struct EnhancedDayView: View {
     @State private var selectedGhostIDs: Set<UUID> = []
     @State private var refreshTask: Task<Void, Never>? = nil
     @State private var diagnosticsOverride = false
+    private let onAcceptanceInfoChange: (GhostAcceptanceInfo?) -> Void
     
     // Constants for precise timeline sizing
     private let minuteHeight: CGFloat = 1.0 // 1 pixel per minute = perfect precision
@@ -47,11 +37,13 @@ struct EnhancedDayView: View {
     init(
         selectedDate: Binding<Date>,
         ghostSuggestions: Binding<[Suggestion]> = .constant([]),
-        showingRecommendations: Binding<Bool> = .constant(true)
+        showingRecommendations: Binding<Bool> = .constant(true),
+        onAcceptanceInfoChange: @escaping (GhostAcceptanceInfo?) -> Void = { _ in }
     ) {
         _selectedDate = selectedDate
         _ghostSuggestions = ghostSuggestions
         _showingRecommendations = showingRecommendations
+        self.onAcceptanceInfoChange = onAcceptanceInfoChange
     }
     
     var body: some View {
@@ -82,9 +74,6 @@ struct EnhancedDayView: View {
                 )
                 .padding(.trailing, 2)
                 .padding(.bottom, ghostAcceptanceInset)
-                .background(
-                    Color.clear.preference(key: GhostAcceptancePreferenceKey.self, value: acceptanceInfo)
-                )
             }
             .scrollIndicators(.hidden)
             .scrollDisabled(draggedBlock != nil) // Disable scroll when dragging an event
@@ -102,18 +91,22 @@ struct EnhancedDayView: View {
             if showingRecommendations {
                 startGhostRefresh(force: true)
             }
+            updateAcceptanceInfo()
         }
         .onDisappear {
             stopGhostRefresh()
+            onAcceptanceInfoChange(nil)
         }
         .onChange(of: showingRecommendations) { _, isEnabled in
             if isEnabled {
                 startGhostRefresh(force: true)
+                updateAcceptanceInfo()
             } else {
                 stopGhostRefresh()
                 selectedGhostIDs.removeAll()
                 diagnosticsOverride = false
                 dataManager.diagnosticsGhostOverrideActive = false
+                onAcceptanceInfoChange(nil)
             }
         }
         .onChange(of: dataManager.appState.preferences.autoRefreshRecommendations) { _, newValue in
@@ -124,6 +117,12 @@ struct EnhancedDayView: View {
                     stopGhostRefresh()
                 }
             }
+        }
+        .onChange(of: ghostSuggestions) { _, _ in
+            updateAcceptanceInfo()
+        }
+        .onChange(of: selectedGhostIDs) { _, _ in
+            updateAcceptanceInfo()
         }
         .onReceive(NotificationCenter.default.publisher(for: .diagnosticsSpawnGhosts)) { notification in
             guard let count = notification.userInfo?["count"] as? Int, count > 0 else { return }
@@ -184,6 +183,10 @@ struct EnhancedDayView: View {
         )
     }
 
+    private func updateAcceptanceInfo() {
+        onAcceptanceInfoChange(acceptanceInfo)
+    }
+
     private func makeDiagnosticsSuggestions(count: Int) -> [Suggestion] {
         let calendar = Calendar.current
         let dayStart = calendar.startOfDay(for: selectedDate)
@@ -210,6 +213,7 @@ struct EnhancedDayView: View {
         } else {
             selectedGhostIDs.insert(suggestion.id)
         }
+        updateAcceptanceInfo()
     }
 }
 
@@ -261,6 +265,7 @@ private extension EnhancedDayView {
             }
             let validIDs = Set(placedSuggestions.map(\.id))
             selectedGhostIDs = selectedGhostIDs.intersection(validIDs)
+            updateAcceptanceInfo()
         }
         if let reason { dataManager.consumeMicroUpdate(reason: reason) }
     }
@@ -570,6 +575,7 @@ private extension EnhancedDayView {
             }
         }
         selectedGhostIDs.subtract(acceptedIDs)
+        updateAcceptanceInfo()
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             await refreshGhosts(force: true, reason: .acceptedSuggestion)
