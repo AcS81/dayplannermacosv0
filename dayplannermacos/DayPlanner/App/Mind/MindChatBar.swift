@@ -165,13 +165,17 @@ struct MindChatBar: View {
     }
 
     private func fallbackResponse(for message: String) -> MindCommandResponse? {
+        if let goalAdjustment = offlineGoalAdjustment(for: message) {
+            return goalAdjustment
+        }
         if let offlineAdjustment = offlinePillarAdjustment(for: message) {
             return offlineAdjustment
         }
         if let creation = offlineCreation(for: message) {
             return creation
         }
-        return nil
+        let clarification = clarificationPrompt(for: message)
+        return MindCommandResponse(summary: "Need clarification", commands: [.clarification(clarification)])
     }
 
     private func extractTitle(from message: String, keyword: String) -> String? {
@@ -230,6 +234,52 @@ struct MindChatBar: View {
         return nil
     }
 
+    private func offlineGoalAdjustment(for message: String) -> MindCommandResponse? {
+        guard let goal = findGoalMatch(in: message) else { return nil }
+
+        let newTitle = extractRenameTarget(in: message, goal: goal)
+        let newDescription = extractDescriptionUpdate(in: message)
+        let newFocus = extractFocusUpdate(in: message)
+        let newImportance = parseImportanceLevel(from: message)
+        let nodes = parseGoalNodes(from: message)
+
+        var commands: [MindCommand] = []
+        var summaryParts: [String] = []
+
+        if newTitle != nil || newDescription != nil || newImportance != nil || newFocus != nil {
+            let payload = MindCommandUpdateGoal(
+                reference: MindCommandGoalReference(id: goal.id, title: goal.title),
+                title: newTitle,
+                description: newDescription,
+                emoji: nil,
+                importance: newImportance,
+                focus: newFocus
+            )
+            commands.append(.updateGoal(payload))
+            summaryParts.append("Updated \(goal.title)")
+        }
+
+        if !nodes.isEmpty {
+            for node in nodes {
+                let payload = MindCommandAddNode(
+                    reference: MindCommandGoalReference(id: goal.id, title: goal.title),
+                    node: node,
+                    linkToTitle: nil,
+                    linkLabel: nil
+                )
+                commands.append(.addNode(payload))
+            }
+            summaryParts.append("Added \(nodes.count) node\(nodes.count == 1 ? "" : "s")")
+        }
+
+        guard !commands.isEmpty else { return nil }
+        let summary = summaryParts.joined(separator: " • ")
+        return MindCommandResponse(
+            summary: summary.isEmpty ? "Applied quick changes" : summary,
+            commands: commands
+        )
+    }
+
     private func offlinePillarAdjustment(for message: String) -> MindCommandResponse? {
         guard let pillar = findPillarMatch(in: message) else { return nil }
         let values = parseList(after: ["add value", "add values", "reinforce"], in: message)
@@ -272,6 +322,13 @@ struct MindChatBar: View {
         return dataManager.appState.pillars
             .sorted { $0.name.count > $1.name.count }
             .first { lowered.contains($0.name.lowercased()) }
+    }
+
+    private func findGoalMatch(in message: String) -> Goal? {
+        let lowered = message.lowercased()
+        return dataManager.appState.goals
+            .sorted { $0.title.count > $1.title.count }
+            .first { lowered.contains($0.title.lowercased()) }
     }
 
     private func parseList(after triggers: [String], in message: String) -> [String] {
@@ -365,6 +422,84 @@ struct MindChatBar: View {
             }
         }
         return String(format: "%02d:%02d", adjustedHour, clampedMinute)
+    }
+
+    private func extractRenameTarget(in message: String, goal: Goal) -> String? {
+        let lower = message.lowercased()
+        if lower.contains("rename") || lower.contains("retitle") || lower.contains("call it") {
+            let direct = extractContent(after: "rename \(goal.title.lowercased()) to", in: message, terminators: [".", ",", " and", " with"])
+            if let direct, !direct.isEmpty { return direct.capitalizedFirst }
+            if let generic = extractContent(after: "rename to", in: message, terminators: [".", ",", " and"]) ??
+                extractContent(after: "call it", in: message, terminators: [".", ",", " and"]) {
+                return generic.capitalizedFirst
+            }
+        }
+        return nil
+    }
+
+    private func extractDescriptionUpdate(in message: String) -> String? {
+        if let explicit = extractContent(after: "description to", in: message, terminators: [".", ","]) ??
+            extractContent(after: "describe it as", in: message, terminators: [".", ","]) ??
+            extractContent(after: "set description", in: message, terminators: [".", ","]) {
+            return explicit
+        }
+        return nil
+    }
+
+    private func extractFocusUpdate(in message: String) -> String? {
+        if let focus = extractContent(after: "focus on", in: message, terminators: [".", ","]) ??
+            extractContent(after: "make focus", in: message, terminators: [".", ","]) ??
+            extractContent(after: "active focus", in: message, terminators: [".", ","]) {
+            return focus
+        }
+        return nil
+    }
+
+    private func parseImportanceLevel(from message: String) -> Int? {
+        let lower = message.lowercased()
+        if lower.contains("critical") || lower.contains("urgent") { return 5 }
+        if lower.contains("high priority") || lower.contains("top priority") { return 4 }
+        if lower.contains("low priority") { return 2 }
+        if lower.contains("deprioritize") { return 1 }
+        let digits = [5, 4, 3, 2, 1]
+        for digit in digits {
+            if lower.contains("priority \(digit)") || lower.contains("importance \(digit)") {
+                return digit
+            }
+        }
+        if lower.contains("medium priority") { return 3 }
+        return nil
+    }
+
+    private func parseGoalNodes(from message: String) -> [MindCommandNode] {
+        var results: [MindCommandNode] = []
+        let subgoals = parseList(after: ["add subgoal", "add sub-goal", "subgoal"], in: message)
+        results.append(contentsOf: subgoals.map { MindCommandNode(type: .subgoal, title: $0, detail: nil, pinned: false, weight: nil) })
+
+        let tasks = parseList(after: ["add task", "add tasks", "task"], in: message)
+        results.append(contentsOf: tasks.map { MindCommandNode(type: .task, title: $0, detail: nil, pinned: false, weight: nil) })
+
+        let notes = parseList(after: ["add note", "note"], in: message)
+        results.append(contentsOf: notes.map { MindCommandNode(type: .note, title: $0, detail: nil, pinned: false, weight: nil) })
+
+        let resources = parseList(after: ["add resource", "resource"], in: message)
+        results.append(contentsOf: resources.map { MindCommandNode(type: .resource, title: $0, detail: nil, pinned: false, weight: nil) })
+
+        let metrics = parseList(after: ["add metric", "metric"], in: message)
+        results.append(contentsOf: metrics.map { MindCommandNode(type: .metric, title: $0, detail: nil, pinned: false, weight: nil) })
+
+        return results
+    }
+
+    private func clarificationPrompt(for message: String) -> String {
+        let lower = message.lowercased()
+        if lower.contains("pillar") {
+            return "Which pillar should I adjust, and what should change?"
+        }
+        if lower.contains("goal") {
+            return "Which goal should I update, and how?"
+        }
+        return "Could you specify the goal or pillar you want me to adjust?"
     }
 }
 

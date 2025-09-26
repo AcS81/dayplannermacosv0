@@ -53,9 +53,10 @@ struct MindPanel: View {
                         .environmentObject(aiService)
                         .environment(\.highlightedGoalId, highlightedGoalId)
                         
-                        CrystalPillarsSection()
+                        MindPillarsSection()
                         .id(MindSection.pillars)
                         .environmentObject(dataManager)
+                        .environmentObject(aiService)
                         .environment(\.highlightedPillarId, highlightedPillarId)
                         
                         MindViewSection(
