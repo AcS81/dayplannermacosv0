@@ -284,8 +284,8 @@ struct AITrustSettingsView: View {
                                     .textFieldStyle(.roundedBorder)
                                     .onChange(of: openaiApiKey) { _, newValue in
                                         dataManager.appState.preferences.openaiApiKey = newValue
-                                        UserDefaults.standard.set(openaiApiKey, forKey: "openaiApiKey")
                                         dataManager.save()
+                                        UserDefaults.standard.set(newValue, forKey: "openaiApiKey")
                                         aiService.configure(with: dataManager.appState.preferences)
                                     }
                                 Button("Paste") {
@@ -319,8 +319,8 @@ struct AITrustSettingsView: View {
                                 .textFieldStyle(.roundedBorder)
                                 .onChange(of: whisperApiKey) { _, newValue in
                                     dataManager.appState.preferences.whisperApiKey = newValue
-                                    UserDefaults.standard.set(whisperApiKey, forKey: "whisperApiKey")
                                     dataManager.save()
+                                    UserDefaults.standard.set(newValue, forKey: "whisperApiKey")
                                 }
                             Button("Paste") {
                                 if let clipboard = NSPasteboard.general.string(forType: .string) {
@@ -356,6 +356,21 @@ struct AITrustSettingsView: View {
                     Text("API keys are stored securely and only used for AI services. Custom endpoint defaults to LM Studio.")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                    
+                    // Connection test button
+                    HStack {
+                        Button("Test Connection") {
+                            Task {
+                                await aiService.checkConnection()
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        
+                        Text(aiService.isConnected ? "✅ Connected" : "❌ Not Connected")
+                            .font(.caption)
+                            .foregroundColor(aiService.isConnected ? .green : .red)
+                    }
                 }
             }
 
@@ -393,6 +408,15 @@ struct AITrustSettingsView: View {
             pinBoost = weighting.pinBoost
             pillarBoost = weighting.pillarBoost
             feedbackBoost = weighting.feedbackBoost
+            
+            // Ensure UserDefaults is in sync with data manager
+            if !openaiApiKey.isEmpty {
+                UserDefaults.standard.set(openaiApiKey, forKey: "openaiApiKey")
+            }
+            if !whisperApiKey.isEmpty {
+                UserDefaults.standard.set(whisperApiKey, forKey: "whisperApiKey")
+            }
+            
             aiService.configure(with: dataManager.appState.preferences)
         }
     }

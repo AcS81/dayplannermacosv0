@@ -618,41 +618,24 @@ struct PillarDayView: View {
         isAnalyzing = true
         
         Task {
-            let actionablePillars = dataManager.appState.pillars.filter(\.isActionable)
+            let pillars = dataManager.appState.pillars
             var missing: [Pillar] = []
             var suggestions: [TimeBlock] = []
             
-            let now = Date()
-            let calendar = Calendar.current
-            
-            for pillar in actionablePillars {
-                let daysSinceLastEvent = pillar.lastEventDate?.timeIntervalSince(now) ?? -99999999
-                let needsEvent = shouldCreateEventForPillar(pillar, daysSince: daysSinceLastEvent / 86400)
+            // Check for pillars that need better definition
+            for pillar in pillars {
+                let needsDefinition = pillar.values.isEmpty && pillar.habits.isEmpty && (pillar.wisdomText?.isEmpty ?? true)
+                let needsQuietHours = pillar.quietHours.isEmpty
                 
-                if needsEvent {
+                if needsDefinition || needsQuietHours {
                     missing.append(pillar)
-                }
-            }
-            
-            // Generate suggested events for missing pillars (separate from just listing them)
-            for pillar in missing {
-                if let timeSlot = findBestTimeSlot(for: pillar) {
-                    let suggestedEvent = TimeBlock(
-                        title: pillar.name,
-                        startTime: timeSlot.startTime,
-                        duration: pillar.minDuration,
-                        energy: .daylight,
-                        emoji: pillar.emoji,
-                        relatedPillarId: pillar.id
-                    )
-                    suggestions.append(suggestedEvent)
                 }
             }
             
             await MainActor.run {
                 missingPillars = missing
                 suggestedEvents = suggestions
-                analysisText = generateAnalysisText(missingCount: missing.count, totalPillars: actionablePillars.count)
+                analysisText = generateAnalysisText(missingCount: missing.count, totalPillars: pillars.count)
                 isAnalyzing = false
             }
         }
@@ -766,8 +749,8 @@ struct MissingPillarCard: View {
                     .font(.caption)
                     .foregroundStyle(.orange)
                 
-                if let lastEvent = pillar.lastEventDate {
-                    Text("Last: \(lastEvent.dayString)")
+                if !pillar.values.isEmpty {
+                    Text("Values: \(pillar.values.prefix(2).joined(separator: ", "))")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }

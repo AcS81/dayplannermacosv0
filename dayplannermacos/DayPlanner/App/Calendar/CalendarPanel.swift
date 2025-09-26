@@ -79,7 +79,7 @@ struct CalendarPanel: View {
                     .animation(.spring(response: 0.6, dampingFraction: 0.8), value: showingTodoList)
             }
         }
-        .padding(.bottom, 140)
+        .padding(.bottom, 180) // Increased from 140 to give more space
         .background(.ultraThinMaterial.opacity(0.5), in: RoundedRectangle(cornerRadius: 16))
         .overlay(
             RoundedRectangle(cornerRadius: 16)
@@ -89,7 +89,7 @@ struct CalendarPanel: View {
         .padding(.trailing, 4)
         .padding(.vertical, 12)
         .overlay(alignment: .bottom) {
-            VStack(spacing: 12) {
+            VStack(spacing: 16) { // Increased spacing from 12 to 16
                 if let info = ghostAcceptanceInfo {
                     GhostAcceptanceBar(
                         totalCount: info.totalCount,
@@ -103,7 +103,7 @@ struct CalendarPanel: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             .padding(.horizontal, 32)
-            .padding(.bottom, 18)
+            .padding(.bottom, 24) // Increased from 18 to 24 for more breathing room
         }
         .onPreferenceChange(GhostAcceptancePreferenceKey.self) { info in
             if reduceMotion {

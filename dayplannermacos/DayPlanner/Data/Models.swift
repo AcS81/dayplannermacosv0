@@ -1049,7 +1049,7 @@ extension Day {
 // MARK: - PRD Required Models
 
 /// Pillar: Core life principles that guide all AI decisions - can be actionable (events) or principle (values/thoughts)
-struct Pillar: Identifiable, Codable {
+struct Pillar: Identifiable, Codable, Hashable {
     let id: UUID
     var name: String
     var description: String
@@ -1198,7 +1198,7 @@ enum PillarFrequency: Codable, Hashable, CaseIterable {
     }
 }
 
-struct TimeWindow: Codable {
+struct TimeWindow: Codable, Hashable {
     let startHour: Int // 0-23
     let startMinute: Int // 0-59
     let endHour: Int
@@ -1652,7 +1652,7 @@ enum IntakeCategory: String, Codable, CaseIterable {
 // MARK: - Helper Types
 
 /// Codable wrapper for SwiftUI Color
-struct CodableColor: Codable {
+struct CodableColor: Codable, Hashable {
     let red: Double
     let green: Double
     let blue: Double

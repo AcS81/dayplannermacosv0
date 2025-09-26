@@ -1172,12 +1172,12 @@ struct MissingPillarCard: View {
                     .font(.subheadline)
                     .fontWeight(.medium)
                 
-                Text("\(pillar.frequencyDescription) - overdue")
+                Text("\(pillar.frequencyDescription) - needs attention")
                     .font(.caption)
                     .foregroundStyle(.orange)
                 
-                if let lastEvent = pillar.lastEventDate {
-                    Text("Last: \(lastEvent.dayString)")
+                if !pillar.values.isEmpty {
+                    Text("Values: \(pillar.values.prefix(2).joined(separator: ", "))")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }

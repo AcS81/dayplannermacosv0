@@ -8,6 +8,8 @@ struct CalendarChatBar: View {
     @State private var isSending = false
     @State private var editingBlock: TimeBlock?
     @State private var undoCandidate: Record?
+    @State private var showConnectionAlert = false
+    @State private var lastErrorMessage: String?
     @FocusState private var isFocused: Bool
     
     private var currentPrompt: String {
@@ -25,7 +27,7 @@ struct CalendarChatBar: View {
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 14) { // Increased from 10 to 14
             HStack(alignment: .center, spacing: 12) {
                 Image(systemName: isConfirming ? "questionmark.circle" : "sparkles")
                     .font(.title3)
@@ -38,6 +40,15 @@ struct CalendarChatBar: View {
                 if isSending {
                     ProgressView()
                         .controlSize(.small)
+                } else if !aiService.isConnected {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(.red)
+                            .frame(width: 6, height: 6)
+                        Text("AI Offline")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
                 }
             }
             
@@ -75,7 +86,7 @@ struct CalendarChatBar: View {
             HStack(spacing: 12) {
                 TextField("Type a quick reply…", text: $inputText)
                     .textFieldStyle(.roundedBorder)
-                    .disabled(isSending)
+                    .disabled(isSending || !aiService.isConnected)
                     .focused($isFocused)
                     .submitLabel(.send)
                     .onSubmit(handleSend)
@@ -85,9 +96,9 @@ struct CalendarChatBar: View {
                         .font(.headline)
                         .foregroundStyle(.white)
                         .padding(10)
-                        .background(isSending ? Color.gray : Color.blue, in: Circle())
+                        .background(isSending ? Color.gray : (aiService.isConnected ? Color.blue : Color.red), in: Circle())
                 }
-                .disabled(isSending || inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(isSending || inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !aiService.isConnected)
             }
             
             HStack(spacing: 10) {
@@ -99,8 +110,8 @@ struct CalendarChatBar: View {
                 }
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 20) // Increased from 18 to 20
+        .padding(.vertical, 16) // Increased from 14 to 16
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -110,6 +121,16 @@ struct CalendarChatBar: View {
         .onAppear(perform: refreshPrompt)
         .onChange(of: dataManager.appState.currentDay.blocks) { _, _ in
             refreshPrompt()
+        }
+        .alert("AI Service Not Connected", isPresented: $showConnectionAlert) {
+            Button("Test Connection") {
+                Task {
+                    await aiService.checkConnection()
+                }
+            }
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(lastErrorMessage ?? "Please check your API configuration in Settings.")
         }
         .sheet(item: $editingBlock) { block in
             NoFlashEventDetailsSheet(
@@ -177,7 +198,18 @@ struct CalendarChatBar: View {
             do {
                 _ = try await aiService.getSuggestions(for: message, context: context)
             } catch {
-                // For now we silently ignore failures; logging could be added here
+                await MainActor.run {
+                    print("❌ Chat error: \(error.localizedDescription)")
+                    // Show user feedback for connection issues
+                    if let aiError = error as? AIError, aiError == .notConnected {
+                        lastErrorMessage = "AI service is not connected. Please check your API configuration in Settings."
+                        showConnectionAlert = true
+                        print("⚠️ AI service not connected. Check your API configuration in Settings.")
+                    } else {
+                        lastErrorMessage = "Failed to process request: \(error.localizedDescription)"
+                        showConnectionAlert = true
+                    }
+                }
             }
             await MainActor.run {
                 isSending = false

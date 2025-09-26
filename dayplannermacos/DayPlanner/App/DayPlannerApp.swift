@@ -10384,17 +10384,16 @@ struct PillarDayView: View {
         isAnalyzing = true
         
         Task {
-            let actionablePillars = dataManager.appState.pillars.filter(\.isActionable)
+            let pillars = dataManager.appState.pillars
             var missing: [Pillar] = []
             var suggestions: [TimeBlock] = []
             
-            let now = Date()
-            
-            for pillar in actionablePillars {
-                let daysSinceLastEvent = pillar.lastEventDate?.timeIntervalSince(now) ?? -99999999
-                let needsEvent = shouldCreateEventForPillar(pillar, daysSince: daysSinceLastEvent / 86400)
+            // Check for pillars that need better definition
+            for pillar in pillars {
+                let needsDefinition = pillar.values.isEmpty && pillar.habits.isEmpty && (pillar.wisdomText?.isEmpty ?? true)
+                let needsQuietHours = pillar.quietHours.isEmpty
                 
-                if needsEvent {
+                if needsDefinition || needsQuietHours {
                     missing.append(pillar)
                 }
             }
@@ -10531,8 +10530,8 @@ struct MissingPillarCard: View {
                     .font(.caption)
                     .foregroundStyle(.orange)
                 
-                if let lastEvent = pillar.lastEventDate {
-                    Text("Last: \(lastEvent.dayString)")
+                if !pillar.values.isEmpty {
+                    Text("Values: \(pillar.values.prefix(2).joined(separator: ", "))")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -15019,7 +15018,7 @@ struct IntakeSection: View {
         You are the CORE AI system that controls chains, pillars, and goals. You have elevated permissions to modify user data.
         
         Current system state:
-        - Pillars: \(dataManager.appState.pillars.count) (\(dataManager.appState.pillars.filter(\.isActionable).count) actionable, \(dataManager.appState.pillars.filter(\.isPrinciple).count) principles)
+        - Pillars: \(dataManager.appState.pillars.count) (all principle-based)
         - Goals: \(dataManager.appState.goals.count) (\(dataManager.appState.goals.filter(\.isActive).count) active)
         - Chains: \(dataManager.appState.recentChains.count)
         - User XP: \(dataManager.appState.userXP) | XXP: \(dataManager.appState.userXXP)
@@ -15824,20 +15823,13 @@ struct AIOutgoSection: View {
     }
     
     private func calculatePillarAdherence() -> Double {
-        let actionablePillars = dataManager.appState.pillars.filter(\.isActionable)
-        guard !actionablePillars.isEmpty else { return 7.0 }
+        let pillars = dataManager.appState.pillars
+        guard !pillars.isEmpty else { return 7.0 }
         
-        // Simple calculation based on how recently pillar events were created
-        let now = Date()
-        let adherenceScores = actionablePillars.map { pillar in
-            guard let lastEvent = pillar.lastEventDate else { return 3.0 }
-            let daysSince = now.timeIntervalSince(lastEvent) / 86400
-            
-            switch pillar.frequency {
-            case .daily: return daysSince <= 1 ? 10.0 : max(0, 10 - daysSince)
-            case .weekly: return daysSince <= 7 ? 10.0 : max(0, 10 - (daysSince / 7))
-            default: return 7.0
-            }
+        // Simple calculation based on pillar completeness
+        let adherenceScores = pillars.map { pillar in
+            let completeness = (pillar.values.isEmpty ? 0 : 1) + (pillar.habits.isEmpty ? 0 : 1) + (pillar.wisdomText?.isEmpty == false ? 1 : 0) + (pillar.quietHours.isEmpty ? 0 : 1)
+            return Double(completeness) * 2.5
         }
         
         return adherenceScores.reduce(0, +) / Double(adherenceScores.count)
@@ -15897,7 +15889,7 @@ struct AIAnalysisView: View {
             
             🎯 Goal Alignment: Your active goals show varying levels of progress. Consider breaking down larger goals into specific chains or pillar activities.
             
-            ⛰️ Pillar Strength: Your \(dataManager.appState.pillars.filter(\.isPrinciple).count) principle pillars provide good guidance, while your \(dataManager.appState.pillars.filter(\.isActionable).count) actionable pillars need consistent application.
+            ⛰️ Pillar Strength: Your \(dataManager.appState.pillars.count) principle pillars provide guidance for AI decisions and ghost suggestions.
             
             🔗 Chain Usage: You've created \(dataManager.appState.recentChains.count) chains, showing good understanding of activity sequences.
             
