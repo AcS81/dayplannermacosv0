@@ -414,9 +414,9 @@ private extension EnhancedDayView {
         if dayEnd > cursor + 600 {
             gaps.append(TimeGap(start: cursor, end: dayEnd))
         }
-        return gaps
+        return subtractQuietHours(from: gaps, on: date)
     }
-    
+
     func snapUpToNearestFiveMinutes(_ date: Date) -> Date {
         let calendar = Calendar.current
         let minute = calendar.component(.minute, from: date)
@@ -464,6 +464,80 @@ private extension EnhancedDayView {
             }
         }
         return false
+    }
+
+    private func subtractQuietHours(from gaps: [TimeGap], on date: Date) -> [TimeGap] {
+        let quietIntervals = quietTimeIntervals(for: date)
+        guard !quietIntervals.isEmpty else { return gaps }
+
+        var adjustedGaps = gaps
+        for quiet in quietIntervals {
+            var next: [TimeGap] = []
+            for gap in adjustedGaps {
+                if quiet.end <= gap.start || quiet.start >= gap.end {
+                    next.append(gap)
+                    continue
+                }
+
+                if quiet.start > gap.start {
+                    next.append(TimeGap(start: gap.start, end: quiet.start))
+                }
+                if quiet.end < gap.end {
+                    next.append(TimeGap(start: quiet.end, end: gap.end))
+                }
+            }
+            adjustedGaps = next
+            if adjustedGaps.isEmpty { break }
+        }
+
+        return adjustedGaps
+            .filter { $0.duration >= 600 }
+            .sorted { $0.start < $1.start }
+    }
+
+    private func quietTimeIntervals(for date: Date) -> [TimeGap] {
+        let calendar = Calendar.current
+        let dayStart = calendar.startOfDay(for: date)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart.addingTimeInterval(86_400)
+
+        let rawIntervals: [TimeGap] = dataManager.appState.pillars.flatMap { pillar in
+            pillar.quietHours.compactMap { window -> TimeGap? in
+                guard
+                    let start = calendar.date(bySettingHour: window.startHour, minute: window.startMinute, second: 0, of: dayStart),
+                    let end = calendar.date(bySettingHour: window.endHour, minute: window.endMinute, second: 0, of: dayStart),
+                    end > start
+                else {
+                    return nil
+                }
+                let clampedStart = max(start, dayStart)
+                let clampedEnd = min(end, dayEnd)
+                guard clampedEnd > clampedStart else { return nil }
+                return TimeGap(start: clampedStart, end: clampedEnd)
+            }
+        }
+
+        return mergeIntervals(rawIntervals)
+    }
+
+    private func mergeIntervals(_ intervals: [TimeGap]) -> [TimeGap] {
+        guard !intervals.isEmpty else { return [] }
+        let sorted = intervals.sorted { $0.start < $1.start }
+        var merged: [TimeGap] = []
+
+        for interval in sorted {
+            if merged.isEmpty {
+                merged.append(interval)
+                continue
+            }
+
+            if interval.start <= merged[merged.count - 1].end {
+                merged[merged.count - 1].end = max(merged[merged.count - 1].end, interval.end)
+            } else {
+                merged.append(interval)
+            }
+        }
+
+        return merged
     }
     
     func acceptAllGhosts() {

@@ -175,7 +175,7 @@ struct MindPillarCard: View {
         .buttonStyle(.plain)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(nsColor: .secondarySystemBackground).opacity(0.6))
+                .fill(Color(.secondarySystemBackground).opacity(0.6))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -233,7 +233,7 @@ struct MindEmptyPillarsCard: View {
         .buttonStyle(.plain)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(nsColor: .secondarySystemBackground).opacity(0.5))
+                .fill(Color(.secondarySystemBackground).opacity(0.5))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
