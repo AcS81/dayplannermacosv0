@@ -61,7 +61,7 @@ struct EnhancedDayView: View {
                         creationTime = time
                         showingBlockCreation = true
                     },
-                    onBlockDrag: { block, location in
+                    onBlockDrag: { block, _ in
                         draggedBlock = block
                     },
                     onBlockDrop: { block, newTime in
@@ -72,7 +72,8 @@ struct EnhancedDayView: View {
                     ghostSuggestions: ghostSuggestions,
                     dayStartHour: dayStartHour,
                     selectedGhosts: $selectedGhostIDs,
-                    onGhostToggle: toggleGhostSelection
+                    onGhostToggle: toggleGhostSelection,
+                    onGhostDismiss: dismissGhost
                 )
                 .padding(.trailing, 2)
                 .padding(.bottom, ghostAcceptanceInset)
@@ -216,8 +217,29 @@ struct EnhancedDayView: View {
         } else {
             selectedGhostIDs.insert(suggestion.id)
         }
-        
+
         updateAcceptanceInfo()
+    }
+
+    private func dismissGhost(_ suggestion: Suggestion) {
+        let identifier = suggestion.id
+        dataManager.rejectSuggestion(suggestion, reason: "ghost_dismissed")
+        let removal = {
+            ghostSuggestions.removeAll { $0.id == identifier }
+        }
+        if reduceMotion {
+            removal()
+        } else {
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) {
+                removal()
+            }
+        }
+        selectedGhostIDs.remove(identifier)
+        updateAcceptanceInfo()
+
+        Task { @MainActor in
+            await refreshGhosts(force: false, reason: .rejectedSuggestion)
+        }
     }
 }
 
@@ -435,9 +457,9 @@ private extension EnhancedDayView {
     }
     
     func normalizeSuggestions(_ suggestions: [Suggestion]) -> [Suggestion] {
-        let existingMap = Dictionary(uniqueKeysWithValues: ghostSuggestions.map { (fingerprint(for: $0), $0.id) })
+        let existingMap = Dictionary(uniqueKeysWithValues: ghostSuggestions.map { ($0.scheduleFingerprint, $0.id) })
         return suggestions.map { suggestion in
-            let key = fingerprint(for: suggestion)
+            let key = suggestion.scheduleFingerprint
             if let existingID = existingMap[key] {
                 return Suggestion(
                     id: existingID,
@@ -459,10 +481,9 @@ private extension EnhancedDayView {
             return suggestion
         }
     }
-    
+
     func fingerprint(for suggestion: Suggestion) -> String {
-        let startKey = Int(suggestion.suggestedTime.timeIntervalSinceReferenceDate)
-        return "\(suggestion.title.lowercased())|\(Int(suggestion.duration))|\(suggestion.energy.rawValue)|\(startKey)"
+        suggestion.scheduleFingerprint
     }
     
     func shouldUpdateGhosts(current: [Suggestion], new: [Suggestion]) -> Bool {

@@ -8,6 +8,7 @@ struct GhostOverlay: View {
     let suggestions: [Suggestion]
     @Binding var selectedGhosts: Set<UUID>
     let onToggle: (Suggestion) -> Void
+    let onDismiss: (Suggestion) -> Void
     
     var body: some View {
         ForEach(suggestions) { suggestion in
@@ -17,7 +18,8 @@ struct GhostOverlay: View {
                 dayStartHour: dayStartHour,
                 minuteHeight: minuteHeight,
                 isSelected: selectedGhosts.contains(suggestion.id),
-                onToggle: { onToggle(suggestion) }
+                onToggle: { onToggle(suggestion) },
+                onDismiss: { onDismiss(suggestion) }
             )
             .transition(reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 0.98)))
         }
@@ -36,10 +38,12 @@ private struct GhostEventCard: View {
     let minuteHeight: CGFloat
     let isSelected: Bool
     let onToggle: () -> Void
-    
+    let onDismiss: () -> Void
+
     @EnvironmentObject private var dataManager: AppDataManager
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovering = false
+    @State private var isDismissHovering = false
     
     private var calendar: Calendar { Calendar.current }
     
@@ -54,11 +58,9 @@ private struct GhostEventCard: View {
     }
     
     private var eventHeight: CGFloat {
-        let verticalPadding: CGFloat = 20
-        let minimumTotalHeight: CGFloat = 44
+        let minimumVisualHeight: CGFloat = 54
         let rawTotalHeight = CGFloat(suggestion.duration / 60) * minuteHeight
-        let adjustedTotalHeight = max(rawTotalHeight, minimumTotalHeight)
-        return max(adjustedTotalHeight - verticalPadding, 0)
+        return max(rawTotalHeight, minimumVisualHeight)
     }
     
     private var checkboxSymbol: String {
@@ -149,92 +151,118 @@ private struct GhostEventCard: View {
     }
 
     var body: some View {
-        Button(action: onToggle) {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: checkboxSymbol)
-                    .font(.title3)
-                    .foregroundStyle(checkboxTint)
-                    .padding(.top, 2)
-                    .symbolRenderingMode(.palette)
-                
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text("\(suggestion.emoji) \(suggestion.title)")
-                            .font(.subheadline)
-                            .fontWeight(.semibold)
-                            .foregroundStyle(Color.white.opacity(0.9))
-                            .lineLimit(2)
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 2) {
-                            Text(suggestion.suggestedTime.timeString)
-                                .font(.caption2)
-                                .foregroundStyle(Color.white.opacity(0.7))
-                            
-                            // Add visual hint for interaction
-                            if !isSelected {
-                                Text("Tap to select")
-                                    .font(.caption2)
-                                    .foregroundStyle(Color.white.opacity(0.5))
-                                    .italic()
-                            }
-                        }
-                    }
-                    
-                    HStack(spacing: 8) {
-                        TagView(
-                            text: "\(Int(suggestion.duration / 60))m",
-                            systemImage: "clock" 
-                        )
-                        TagView(
-                            text: energyLabel,
-                            systemImage: "sparkles"
-                        )
-                        if suggestion.confidence > 0 {
-                            TagView(
-                                text: "\(Int(suggestion.confidence * 100))%",
-                                systemImage: "bolt.fill"
-                            )
-                        }
-                    }
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: checkboxSymbol)
+                .font(.title3)
+                .foregroundStyle(checkboxTint)
+                .padding(.top, 2)
+                .symbolRenderingMode(.palette)
 
-                    if showSuggestionContext && !connectionBadgeItems.isEmpty {
-                        ConnectionBadgeRow(items: connectionBadgeItems)
-                    }
-                    
-                    if showSuggestionContext && !suggestion.explanation.isEmpty {
-                        Text(suggestion.explanation)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("\(suggestion.emoji) \(suggestion.title)")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Color.white.opacity(0.9))
+                        .lineLimit(2)
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(suggestion.suggestedTime.timeString)
                             .font(.caption2)
-                            .foregroundStyle(Color.white.opacity(0.75))
-                            .lineLimit(2)
+                            .foregroundStyle(Color.white.opacity(0.7))
+
+                        // Add visual hint for interaction
+                        if !isSelected {
+                            Text("Tap to stage")
+                                .font(.caption2)
+                                .foregroundStyle(Color.white.opacity(0.5))
+                                .italic()
+                        }
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    TagView(
+                        text: "\(Int(suggestion.duration / 60))m",
+                        systemImage: "clock"
+                    )
+                    TagView(
+                        text: energyLabel,
+                        systemImage: "sparkles"
+                    )
+                    if suggestion.confidence > 0 {
+                        TagView(
+                            text: "\(Int(suggestion.confidence * 100))%",
+                            systemImage: "bolt.fill"
+                        )
+                    }
+                }
+
+                if showSuggestionContext && !connectionBadgeItems.isEmpty {
+                    ConnectionBadgeRow(items: connectionBadgeItems)
+                }
+
+                if showSuggestionContext && !suggestion.explanation.isEmpty {
+                    Text(suggestion.explanation)
+                        .font(.caption2)
+                        .foregroundStyle(Color.white.opacity(0.75))
+                        .lineLimit(2)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(backgroundColor)
+                .blur(radius: 0.2)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(style: StrokeStyle(lineWidth: 1.2, dash: [6, 6], dashPhase: 6))
+                        .foregroundStyle(borderColor)
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+        )
+        .overlay(alignment: .topTrailing) {
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Color.white.opacity(isDismissHovering ? 0.95 : 0.75))
+                    .padding(6)
+                    .background(
+                        Circle()
+                            .fill(Color.white.opacity(isDismissHovering ? 0.22 : 0.12))
+                    )
+            }
+            .buttonStyle(.plain)
+            .padding(8)
+            .accessibilityLabel(Text("Remove suggestion"))
+            .onHover { hovering in
+                if reduceMotion {
+                    isDismissHovering = hovering
+                } else {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        isDismissHovering = hovering
                     }
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(backgroundColor)
-                    .blur(radius: 0.2)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .strokeBorder(style: StrokeStyle(lineWidth: 1.2, dash: [6, 6], dashPhase: 6))
-                            .foregroundStyle(borderColor)
-                    )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
-            )
-            .shadow(color: Color.black.opacity(0.18), radius: 6, x: 0, y: 4)
         }
-        .buttonStyle(.plain)
+        .shadow(color: Color.black.opacity(0.18), radius: 6, x: 0, y: 4)
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .onTapGesture(perform: onToggle)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(accessibilitySummary))
         .accessibilityValue(Text(isSelected ? "Selected" : "Not selected"))
-        .accessibilityHint(Text("Activate to toggle this suggestion"))
+        .accessibilityHint(Text("Tap to toggle this suggestion. Use Remove to dismiss it."))
         .accessibilityAddTraits(.isButton)
+        .accessibilityAction(named: Text(isSelected ? "Deselect" : "Select"), onToggle)
+        .accessibilityAction(named: Text("Remove suggestion"), onDismiss)
         .frame(height: eventHeight, alignment: .top)
         .offset(y: yPosition)
         .opacity(isHovering ? 0.95 : 0.85)

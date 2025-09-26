@@ -524,12 +524,13 @@ class AppDataManager: ObservableObject {
             let pillarInfo = pillarBoost(for: suggestion, weighting: weighting)
             let feedbackInfo = feedbackBoost(for: suggestion, weighting: weighting)
             let totalBoost = goalInfo.boost + pillarInfo.boost + feedbackInfo.boost
-            let finalScore = (baseScore + totalBoost) * suggestion.confidence
+            let penaltyInfo = rejectionPenalty(for: suggestion)
+            let finalScore = max(0, (baseScore + totalBoost) * suggestion.confidence * penaltyInfo.multiplier)
             var updated = suggestion
             updated.weight = finalScore
             updated.reason = combinedReason(
                 base: suggestion.reason ?? suggestion.explanation,
-                additions: [goalInfo.annotation, pillarInfo.annotation, feedbackInfo.annotation]
+                additions: [goalInfo.annotation, pillarInfo.annotation, feedbackInfo.annotation, penaltyInfo.annotation]
             )
             return WeightedSuggestion(
                 suggestion: updated,
@@ -537,7 +538,8 @@ class AppDataManager: ObservableObject {
                 pinBoost: goalInfo.boost,
                 pillarBoost: pillarInfo.boost,
                 feedbackBoost: feedbackInfo.boost,
-                confidence: suggestion.confidence
+                confidence: suggestion.confidence,
+                rejectionMultiplier: penaltyInfo.multiplier
             )
         }
         suggestionSnapshots = annotated.map { entry in
@@ -611,6 +613,20 @@ class AppDataManager: ObservableObject {
         return (boost, summary)
     }
 
+    private func rejectionPenalty(for suggestion: Suggestion) -> (multiplier: Double, annotation: String?) {
+        guard let memory = appState.suggestionRejectionMemories[suggestion.scheduleFingerprint] else {
+            return (1.0, nil)
+        }
+        let multiplier = max(0.1, memory.penaltyMultiplier(relativeTo: Date(), candidateTime: suggestion.suggestedTime))
+        if multiplier >= 0.95 { return (1.0, nil) }
+
+        var annotationParts: [String] = ["↓ skipped earlier"]
+        if memory.rejectionCount > 1 {
+            annotationParts.append("×\(memory.rejectionCount)")
+        }
+        return (multiplier, annotationParts.joined(separator: " "))
+    }
+
     private func combinedReason(base: String?, additions: [String?]) -> String? {
         let trimmedBase = base?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let extras = additions.compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
@@ -632,7 +648,8 @@ class AppDataManager: ObservableObject {
             let pillar = String(format: "%.2f", entry.pillarBoost)
             let feedback = String(format: "%.2f", entry.feedbackBoost)
             let confidence = String(format: "%.2f", entry.confidence)
-            print("  \(index + 1). \(entry.suggestion.title) → score \(formatted) = (base \(base) + pin \(pin) + pillar \(pillar) + feedback \(feedback)) × conf \(confidence)")
+            let rejection = String(format: "%.2f", entry.rejectionMultiplier)
+            print("  \(index + 1). \(entry.suggestion.title) → score \(formatted) = (base \(base) + pin \(pin) + pillar \(pillar) + feedback \(feedback)) × conf \(confidence) × rej \(rejection)")
         }
         print("🔍——")
     }
@@ -644,6 +661,7 @@ class AppDataManager: ObservableObject {
         var pillarBoost: Double
         var feedbackBoost: Double
         var confidence: Double
+        var rejectionMultiplier: Double
     }
     
     // MARK: - Confirmation & Records
@@ -2287,10 +2305,13 @@ class AppDataManager: ObservableObject {
     /// Enhanced applySuggestion with pattern learning
     func applySuggestion(_ suggestion: Suggestion) {
         var block = suggestion.toTimeBlock()
-        
+
         // Record that suggestion was accepted
         recordSuggestionFeedback(suggestion, accepted: true)
-        
+
+        // A successful scheduling means previous rejections for this slot are resolved.
+        appState.suggestionRejectionMemories.removeValue(forKey: suggestion.scheduleFingerprint)
+
         // Record the time block creation
         recordTimeBlockCreation(block, source: "ai_suggestion")
         
@@ -2315,7 +2336,22 @@ class AppDataManager: ObservableObject {
     func rejectSuggestion(_ suggestion: Suggestion, reason: String? = nil) {
         // Record rejection for learning
         recordSuggestionFeedback(suggestion, accepted: false, reason: reason)
-        
+
+        // Track rejection memory so future ghosts are more considerate.
+        let fingerprint = suggestion.scheduleFingerprint
+        let now = Date()
+        var memory = appState.suggestionRejectionMemories[fingerprint] ?? SuggestionRejectionMemory(
+            fingerprint: fingerprint,
+            title: suggestion.title,
+            lastSuggestedTime: suggestion.suggestedTime,
+            lastRejectedAt: now,
+            rejectionCount: 0
+        )
+        memory.title = suggestion.title
+        memory.recordRejection(at: now, suggestedTime: suggestion.suggestedTime)
+        appState.suggestionRejectionMemories[fingerprint] = memory
+        pruneRejectionMemories()
+
         // Track rejection patterns for learning
         let rejectionPattern = "rejected:\(suggestion.title.lowercased())"
         if !appState.userPatterns.contains(rejectionPattern) {
@@ -2323,6 +2359,19 @@ class AppDataManager: ObservableObject {
         }
         save()
         requestMicroUpdate(.rejectedSuggestion)
+    }
+
+    private func pruneRejectionMemories(maxCount: Int = 80) {
+        let cutoff = Date().addingTimeInterval(-2 * 24 * 3600)
+        var filtered = appState.suggestionRejectionMemories.filter { _, memory in
+            memory.lastRejectedAt >= cutoff
+        }
+        if filtered.count > maxCount {
+            let sorted = filtered.values.sorted { $0.lastRejectedAt > $1.lastRejectedAt }
+            let keep = Set(sorted.prefix(maxCount).map { $0.fingerprint })
+            filtered = filtered.filter { keep.contains($0.key) }
+        }
+        appState.suggestionRejectionMemories = filtered
     }
     
     /// Get all items related to a specific emoji (for consistency checking)
