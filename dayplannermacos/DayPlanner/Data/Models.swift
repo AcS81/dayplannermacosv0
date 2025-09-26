@@ -43,7 +43,12 @@ struct TimeBlock: Identifiable, Codable, Equatable, Transferable {
     var durationMinutes: Int {
         Int(duration / 60)
     }
-    
+
+    /// Emoji to display in the UI. Confirmed items swap their icon for a lock.
+    var displayEmoji: String {
+        confirmationState == .confirmed ? "🔒" : emoji
+    }
+
     // Time period this block belongs to
     var period: TimePeriod {
         let hour = Calendar.current.component(.hour, from: startTime)
@@ -547,6 +552,7 @@ struct Suggestion: Identifiable, Codable, Equatable {
     var relatedPillarTitle: String? = nil
     var reason: String? = nil
     var linkHints: [String]? = nil
+    var rawSuggestedTime: String? = nil
     
     init(
         id: UUID = UUID(),
@@ -563,7 +569,8 @@ struct Suggestion: Identifiable, Codable, Equatable {
         relatedPillarId: UUID? = nil,
         relatedPillarTitle: String? = nil,
         reason: String? = nil,
-        linkHints: [String]? = nil
+        linkHints: [String]? = nil,
+        rawSuggestedTime: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -580,6 +587,7 @@ struct Suggestion: Identifiable, Codable, Equatable {
         self.relatedPillarTitle = relatedPillarTitle
         self.reason = reason
         self.linkHints = linkHints
+        self.rawSuggestedTime = rawSuggestedTime
     }
     
     func toTimeBlock() -> TimeBlock {

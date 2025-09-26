@@ -376,13 +376,22 @@ class AppDataManager: ObservableObject {
     // MARK: - Time Block Operations
     
     func addTimeBlock(_ block: TimeBlock) {
-        withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
-            appState.addBlock(block)
+        var storedBlock = block
+        let calendar = Calendar.current
+        let blockDay = calendar.startOfDay(for: storedBlock.startTime)
+        let currentDay = calendar.startOfDay(for: appState.currentDay.date)
+
+        if calendar.isDate(blockDay, inSameDayAs: currentDay) {
+            withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+                appState.addBlock(storedBlock)
+            }
+        } else {
+            storeBlock(storedBlock, on: blockDay)
         }
-        
+
         // Record for pattern learning
         let creationSource: String
-        switch block.origin {
+        switch storedBlock.origin {
         case .suggestion: creationSource = "ai_suggestion"
         case .onboarding: creationSource = "onboarding"
         case .external: creationSource = "eventkit"
@@ -390,19 +399,21 @@ class AppDataManager: ObservableObject {
         case .aiGenerated: creationSource = "ai_generated"
         case .manual: creationSource = "manual"
         }
-        recordTimeBlockCreation(block, source: creationSource)
-        
+        recordTimeBlockCreation(storedBlock, source: creationSource)
+
         // Award XXP for productive actions
-        if block.energy == .sunrise || block.energy == .daylight {
-            appState.addXXP(Int(block.duration / 60), reason: "Added productive time block")
+        if storedBlock.energy == .sunrise || storedBlock.energy == .daylight {
+            appState.addXXP(Int(storedBlock.duration / 60), reason: "Added productive time block")
         }
-        
-        refreshPastBlocks()
+
+        if calendar.isDate(blockDay, inSameDayAs: currentDay) {
+            refreshPastBlocks()
+        }
         save()
-        if block.origin != .external {
-            onboardingDelegate?.onboardingDidCreateBlock(block, acceptedSuggestion: block.origin == .suggestion)
+        if storedBlock.origin != .external && calendar.isDate(blockDay, inSameDayAs: currentDay) {
+            onboardingDelegate?.onboardingDidCreateBlock(storedBlock, acceptedSuggestion: storedBlock.origin == .suggestion)
         }
-        
+
         // Trigger insight refresh
         // insightsEngine?.checkForUpdates()
     }
@@ -433,6 +444,20 @@ class AppDataManager: ObservableObject {
         var updatedBlock = block
         updatedBlock.startTime = newStartTime
         updateTimeBlock(updatedBlock)
+    }
+
+    private func storeBlock(_ block: TimeBlock, on dayStart: Date) {
+        let calendar = Calendar.current
+        if let index = appState.historicalDays.firstIndex(where: { calendar.isDate($0.date, inSameDayAs: dayStart) }) {
+            var existingDay = appState.historicalDays[index]
+            existingDay.blocks.append(block)
+            existingDay.blocks.sort { $0.startTime < $1.startTime }
+            appState.historicalDays[index] = existingDay
+        } else {
+            var newDay = Day(date: dayStart)
+            newDay.blocks = [block]
+            appState.historicalDays.append(newDay)
+        }
     }
     
     // MARK: - Scheduling Preferences
@@ -687,13 +712,18 @@ class AppDataManager: ObservableObject {
         guard let index = appState.currentDay.blocks.firstIndex(where: { $0.id == blockId }) else { return }
         var block = appState.currentDay.blocks[index]
         let trimmedNotes = notes?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let trimmedNotes, !trimmedNotes.isEmpty {
-            block.notes = trimmedNotes
-        }
+        let confirmationTimestamp = Date()
+        block.notes = composeConfirmationNotes(
+            existing: block.notes,
+            userNotes: trimmedNotes,
+            blockTitle: block.title,
+            startTime: block.startTime,
+            timestamp: confirmationTimestamp
+        )
         block.confirmationState = .confirmed
         block.glassState = .solid
         appState.currentDay.blocks[index] = block
-        
+
         let record = Record(
             blockId: block.id,
             title: block.title,
@@ -702,11 +732,62 @@ class AppDataManager: ObservableObject {
             notes: block.notes,
             energy: block.energy,
             emoji: block.emoji,
-            confirmedAt: Date()
+            confirmedAt: confirmationTimestamp
         )
         appState.records.append(record)
         appState.todoItems.removeAll { $0.followUp?.blockId == block.id }
         save()
+    }
+
+    private func composeConfirmationNotes(existing: String?, userNotes: String?, blockTitle: String, startTime: Date, timestamp: Date) -> String {
+        var lines: [String] = []
+        if let existing, !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            lines.append(existing)
+        }
+        if let userNotes, !userNotes.isEmpty {
+            lines.append(userNotes)
+        }
+
+        let calendar = Calendar.current
+        let eventDay = startTime.dayString
+        let confirmationDay = timestamp.dayString
+
+        let confirmationLine: String
+        if calendar.isDate(timestamp, inSameDayAs: startTime) {
+            confirmationLine = "Confirmed with you at \(timestamp.timeString) on \(eventDay) that \(blockTitle) happened."
+        } else {
+            confirmationLine = "Confirmed with you at \(timestamp.timeString) on \(confirmationDay) that \(blockTitle) happened (scheduled for \(eventDay))."
+        }
+        lines.append(confirmationLine)
+
+        if let weatherLine = weatherObservationLine() {
+            lines.append(weatherLine)
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    private func weatherObservationLine() -> String? {
+        let context = weatherService.getWeatherContext()
+        let trimmed = context
+            .replacingOccurrences(of: "Weather: ", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.lowercased().contains("unknown") else { return nil }
+
+        let punctuationTrimmed = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: ".!?"))
+        let lowercased = punctuationTrimmed.lowercased()
+        let description: String
+        if lowercased.hasPrefix("it ") {
+            description = lowercased
+        } else if lowercased.contains(" was ") {
+            description = lowercased
+        } else if lowercased.hasPrefix("was ") {
+            description = "it \(lowercased)"
+        } else {
+            description = "it was \(lowercased)"
+        }
+
+        return "I noted \(description)."
     }
     
     func undoRecord(_ recordId: UUID) {
