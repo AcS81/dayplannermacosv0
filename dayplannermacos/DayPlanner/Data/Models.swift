@@ -615,7 +615,12 @@ struct DayContext: Codable {
     let pillarGuidance: [String]
     
     init(date: Date, existingBlocks: [TimeBlock], currentEnergy: EnergyType, preferredEmojis: [String], availableTime: TimeInterval, mood: GlassMood, weatherContext: String? = nil, pillarGuidance: [String] = []) {
-        self.date = date
+        let now = Date()
+        if Calendar.current.isDate(date, inSameDayAs: now) {
+            self.date = now
+        } else {
+            self.date = date
+        }
         self.existingBlocks = existingBlocks
         self.currentEnergy = currentEnergy
         self.preferredEmojis = preferredEmojis
@@ -628,6 +633,7 @@ struct DayContext: Codable {
     var summary: String {
         var summary = """
         Date: \(date.formatted(date: .abbreviated, time: .omitted))
+        Time: \(date.formatted(date: .omitted, time: .shortened))
         Energy: \(currentEnergy.description)
         Blocks: \(existingBlocks.count)
         Available: \(Int(availableTime/3600))h
