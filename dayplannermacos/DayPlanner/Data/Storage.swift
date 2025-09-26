@@ -1234,6 +1234,7 @@ class AppDataManager: ObservableObject {
 
         return DayContext(
             date: date,
+            currentTime: Date(),
             existingBlocks: allRelevantBlocks,
             currentEnergy: determineCurrentEnergy(),
             preferredEmojis: extractPreferredEmojis(),

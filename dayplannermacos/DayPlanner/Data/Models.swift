@@ -606,6 +606,7 @@ struct Suggestion: Identifiable, Codable, Equatable {
 /// Context for AI decision making
 struct DayContext: Codable {
     let date: Date
+    let currentTime: Date
     let existingBlocks: [TimeBlock]
     let currentEnergy: EnergyType
     let preferredEmojis: [String]
@@ -613,9 +614,18 @@ struct DayContext: Codable {
     let mood: GlassMood
     let weatherContext: String?
     let pillarGuidance: [String]
-    
-    init(date: Date, existingBlocks: [TimeBlock], currentEnergy: EnergyType, preferredEmojis: [String], availableTime: TimeInterval, mood: GlassMood, weatherContext: String? = nil, pillarGuidance: [String] = []) {
+
+    init(date: Date,
+         currentTime: Date = Date(),
+         existingBlocks: [TimeBlock],
+         currentEnergy: EnergyType,
+         preferredEmojis: [String],
+         availableTime: TimeInterval,
+         mood: GlassMood,
+         weatherContext: String? = nil,
+         pillarGuidance: [String] = []) {
         self.date = date
+        self.currentTime = currentTime
         self.existingBlocks = existingBlocks
         self.currentEnergy = currentEnergy
         self.preferredEmojis = preferredEmojis
@@ -628,6 +638,7 @@ struct DayContext: Codable {
     var summary: String {
         var summary = """
         Date: \(date.formatted(date: .abbreviated, time: .omitted))
+        Current Time: \(currentTime.formatted(date: .omitted, time: .shortened))
         Energy: \(currentEnergy.description)
         Blocks: \(existingBlocks.count)
         Available: \(Int(availableTime/3600))h

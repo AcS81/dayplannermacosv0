@@ -393,7 +393,7 @@ class AIService: ObservableObject {
         SMART INTENT ANALYSIS: Analyze this user message to determine the BEST action with HIGH ACCURACY: "\(message)"
         
         Context:
-        - Current time: \(context.date.formatted(.dateTime.hour().minute()))
+        - Current local time: \(context.currentTime.formatted(.dateTime.hour().minute()))
         - Existing blocks: \(context.existingBlocks.count)
         - Available time: \(Int(context.availableTime/3600)) hours
         - Current energy: \(context.currentEnergy.description)
@@ -889,7 +889,8 @@ class AIService: ObservableObject {
         You are a helpful day planning assistant. The user is planning their day and needs suggestions.
         
         Current context:
-        - Date & Time: \(context.date.formatted(.dateTime.weekday().month().day().year().hour().minute()))
+        - Planning for: \(context.date.formatted(.dateTime.weekday().month().day().year()))
+        - Current local time: \(context.currentTime.formatted(.dateTime.hour().minute().timeZone()))
         - Current energy: \(context.currentEnergy.description)
         - Existing activities: \(context.existingBlocks.count)
         - Available time: \(Int(context.availableTime/3600)) hours
@@ -1467,7 +1468,8 @@ class AIService: ObservableObject {
         You are a helpful day planning assistant. The user is asking for suggestions: "\(message)"
         
         Current context:
-        - Date & Time: \(context.date.formatted(.dateTime.weekday().month().day().year().hour().minute()))
+        - Planning for: \(context.date.formatted(.dateTime.weekday().month().day().year()))
+        - Current local time: \(context.currentTime.formatted(.dateTime.hour().minute().timeZone()))
         - Current energy: \(context.currentEnergy.description)
         - Existing activities: \(context.existingBlocks.count)
         - Available time: \(Int(context.availableTime/3600)) hours
