@@ -12188,13 +12188,18 @@ struct SimpleTimeBlockView: View {
                                 Text(block.emoji)
                                     .font(.caption)
                             }
-                            
+
                             Text(block.title)
                                 .font(.subheadline)
                                 .fontWeight(.medium)
                                 .foregroundColor(.primary)
                                 .lineLimit(1)
-                            
+
+                            if block.confirmationState == .confirmed {
+                                Text("🔒")
+                                    .font(.caption)
+                            }
+
                             Spacer()
                         }
                         

@@ -268,7 +268,12 @@ struct SimpleTimeBlockView: View {
                                 .fontWeight(.medium)
                                 .foregroundColor(.primary)
                                 .lineLimit(1)
-                            
+
+                            if block.confirmationState == .confirmed {
+                                Text("🔒")
+                                    .font(.caption)
+                            }
+
                             Spacer()
                         }
                         

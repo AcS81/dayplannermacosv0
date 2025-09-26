@@ -13,6 +13,7 @@ struct ProportionalTimelineView: View {
     private let showGhosts: Bool
     private let ghostSuggestions: [Suggestion]
     private let onGhostToggle: (Suggestion) -> Void
+    private let onGhostReject: (Suggestion) -> Void
     private let calendar = Calendar.current
     private let dayStartHour: Int
     private let dayEndHour: Int
@@ -41,7 +42,8 @@ struct ProportionalTimelineView: View {
         dayStartHour: Int = 0,
         dayEndHour: Int = 24,
         selectedGhosts: Binding<Set<UUID>> = .constant([]),
-        onGhostToggle: @escaping (Suggestion) -> Void = { _ in }
+        onGhostToggle: @escaping (Suggestion) -> Void = { _ in },
+        onGhostReject: @escaping (Suggestion) -> Void = { _ in }
     ) {
         self.selectedDate = selectedDate
         self.blocks = blocks
@@ -56,6 +58,7 @@ struct ProportionalTimelineView: View {
         self.dayEndHour = dayEndHour
         _selectedGhosts = selectedGhosts
         self.onGhostToggle = onGhostToggle
+        self.onGhostReject = onGhostReject
     }
     
     private var currentHour: Int {
@@ -107,7 +110,8 @@ struct ProportionalTimelineView: View {
                         minuteHeight: minuteHeight,
                         suggestions: ghostSuggestions,
                         selectedGhosts: $selectedGhosts,
-                        onToggle: onGhostToggle
+                        onToggle: onGhostToggle,
+                        onReject: onGhostReject
                     )
                 }
             }
@@ -524,10 +528,10 @@ struct PreciseEventCard: View {
         }
         .overlay(alignment: .topTrailing) {
             if block.confirmationState == .confirmed {
-                Image(systemName: "checkmark.seal.fill")
-                    .font(.caption2)
-                    .foregroundStyle(.green)
+                Text("🔒")
+                    .font(.caption)
                     .padding(6)
+                    .accessibilityLabel(Text("Confirmed"))
             }
         }
         .onHover { hovering in
