@@ -229,10 +229,13 @@ struct GeneralSettingsView: View {
 
 struct AITrustSettingsView: View {
     @EnvironmentObject private var dataManager: AppDataManager
+    @EnvironmentObject private var aiService: AIService
     @State private var safeMode = false
+    @State private var selectedProvider: AIProvider = .local
     @State private var openaiApiKey = ""
     @State private var whisperApiKey = ""
     @State private var customApiEndpoint = ""
+    @State private var openaiModel = "gpt-4o-mini"
     @State private var pinBoost: Double = 0.25
     @State private var pillarBoost: Double = 0.15
     @State private var feedbackBoost: Double = 0.10
@@ -256,62 +259,96 @@ struct AITrustSettingsView: View {
             
             SettingsGroup("API Configuration") {
                 VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("OpenAI API Key:")
-                            .frame(width: 120, alignment: .leading)
-                        SecureField("sk-...", text: $openaiApiKey)
-                            .textFieldStyle(.roundedBorder)
-                            .onChange(of: openaiApiKey) { _, newValue in
-                                dataManager.appState.preferences.openaiApiKey = newValue
-                                UserDefaults.standard.set(openaiApiKey, forKey: "openaiApiKey")
-                                dataManager.save()
+                    Picker("AI Provider", selection: $selectedProvider) {
+                        ForEach(AIProvider.allCases) { provider in
+                            Text(provider.label).tag(provider)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: selectedProvider) { _, newValue in
+                        dataManager.appState.preferences.aiProvider = newValue
+                        dataManager.save()
+                        aiService.configure(with: dataManager.appState.preferences)
+                    }
+
+                    if selectedProvider == .openAI {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Text("OpenAI API Key:")
+                                    .frame(width: 120, alignment: .leading)
+                                SecureField("sk-...", text: $openaiApiKey)
+                                    .textFieldStyle(.roundedBorder)
+                                    .onChange(of: openaiApiKey) { _, newValue in
+                                        dataManager.appState.preferences.openaiApiKey = newValue
+                                        UserDefaults.standard.set(openaiApiKey, forKey: "openaiApiKey")
+                                        dataManager.save()
+                                        aiService.configure(with: dataManager.appState.preferences)
+                                    }
+                                Button("Paste") {
+                                    if let clipboard = NSPasteboard.general.string(forType: .string) {
+                                        openaiApiKey = clipboard
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
                             }
-                        Button("Paste") {
-                            if let clipboard = NSPasteboard.general.string(forType: .string) {
-                                openaiApiKey = clipboard
+
+                            HStack {
+                                Text("Model:")
+                                    .frame(width: 120, alignment: .leading)
+                                TextField("gpt-4o-mini", text: $openaiModel)
+                                    .textFieldStyle(.roundedBorder)
+                                    .onChange(of: openaiModel) { _, newValue in
+                                        dataManager.appState.preferences.openaiModel = newValue
+                                        dataManager.save()
+                                        aiService.configure(with: dataManager.appState.preferences)
+                                    }
                             }
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
                     }
-                    
-                    HStack {
-                        Text("Whisper API Key:")
-                            .frame(width: 120, alignment: .leading)
-                        SecureField("sk-...", text: $whisperApiKey)
-                            .textFieldStyle(.roundedBorder)
-                            .onChange(of: whisperApiKey) { _, newValue in
-                                dataManager.appState.preferences.whisperApiKey = newValue
-                                UserDefaults.standard.set(whisperApiKey, forKey: "whisperApiKey")
-                                dataManager.save()
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("Whisper API Key:")
+                                .frame(width: 120, alignment: .leading)
+                            SecureField("sk-...", text: $whisperApiKey)
+                                .textFieldStyle(.roundedBorder)
+                                .onChange(of: whisperApiKey) { _, newValue in
+                                    dataManager.appState.preferences.whisperApiKey = newValue
+                                    UserDefaults.standard.set(whisperApiKey, forKey: "whisperApiKey")
+                                    dataManager.save()
+                                }
+                            Button("Paste") {
+                                if let clipboard = NSPasteboard.general.string(forType: .string) {
+                                    whisperApiKey = clipboard
+                                }
                             }
-                        Button("Paste") {
-                            if let clipboard = NSPasteboard.general.string(forType: .string) {
-                                whisperApiKey = clipboard
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+
+                        if selectedProvider == .local {
+                            HStack {
+                                Text("Custom Endpoint:")
+                                    .frame(width: 120, alignment: .leading)
+                                TextField("http://localhost:1234", text: $customApiEndpoint)
+                                    .textFieldStyle(.roundedBorder)
+                                    .onChange(of: customApiEndpoint) { _, newValue in
+                                        dataManager.appState.preferences.customApiEndpoint = newValue
+                                        dataManager.save()
+                                        aiService.configure(with: dataManager.appState.preferences)
+                                    }
+                                Button("Paste") {
+                                    if let clipboard = NSPasteboard.general.string(forType: .string) {
+                                        customApiEndpoint = clipboard
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
                             }
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
                     }
-                    
-                    HStack {
-                        Text("Custom Endpoint:")
-                            .frame(width: 120, alignment: .leading)
-                        TextField("http://localhost:1234", text: $customApiEndpoint)
-                            .textFieldStyle(.roundedBorder)
-                            .onChange(of: customApiEndpoint) { _, newValue in
-                                dataManager.appState.preferences.customApiEndpoint = newValue
-                                dataManager.save()
-                            }
-                        Button("Paste") {
-                            if let clipboard = NSPasteboard.general.string(forType: .string) {
-                                customApiEndpoint = clipboard
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    }
-                    
+
                     Text("API keys are stored securely and only used for AI services. Custom endpoint defaults to LM Studio.")
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -343,13 +380,16 @@ struct AITrustSettingsView: View {
         }
         .onAppear {
             safeMode = dataManager.appState.preferences.safeMode
+            selectedProvider = dataManager.appState.preferences.aiProvider
             openaiApiKey = dataManager.appState.preferences.openaiApiKey
             whisperApiKey = dataManager.appState.preferences.whisperApiKey
             customApiEndpoint = dataManager.appState.preferences.customApiEndpoint
+            openaiModel = dataManager.appState.preferences.openaiModel
             let weighting = dataManager.appState.preferences.suggestionWeighting
             pinBoost = weighting.pinBoost
             pillarBoost = weighting.pillarBoost
             feedbackBoost = weighting.feedbackBoost
+            aiService.configure(with: dataManager.appState.preferences)
         }
     }
 

@@ -1055,7 +1055,7 @@ struct IntakeSection: View {
         You are the CORE AI system that controls chains, pillars, and goals. You have elevated permissions to modify user data.
         
         Current system state:
-        - Pillars: \(dataManager.appState.pillars.count) (\(dataManager.appState.pillars.filter(\.isActionable).count) actionable, \(dataManager.appState.pillars.filter(\.isPrinciple).count) principles)
+        - Pillars: \(dataManager.appState.pillars.count) principles (values, habits, constraints)
         - Goals: \(dataManager.appState.goals.count) (\(dataManager.appState.goals.filter(\.isActive).count) active)
         - Chains: \(dataManager.appState.recentChains.count)
         - User XP: \(dataManager.appState.userXP) | XXP: \(dataManager.appState.userXXP)
@@ -1063,7 +1063,7 @@ struct IntakeSection: View {
         User core request: "\(message)"
         
         Available actions:
-        - CREATE_PILLAR(name, type:actionable|principle, description, wisdom_text)
+        - CREATE_PILLAR(name, description, values[], habits[], constraints[], quiet_hours[], frequency, wisdom)
         - EDIT_PILLAR(name, changes)
         - CREATE_GOAL(title, description, importance)
         - BREAK_DOWN_GOAL(goal_name) -> chains/pillars/events
@@ -1133,17 +1133,26 @@ struct IntakeSection: View {
             return
         }
         
+        let name = (pillarData["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "New Pillar"
+        let description = (pillarData["description"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "AI-created pillar"
+        let frequency = parseFrequency(pillarData["frequency"] as? String ?? "weekly")
+        let values = extractStringList(from: pillarData["values"]) 
+        let habits = extractStringList(from: pillarData["habits"])
+        let constraints = extractStringList(from: pillarData["constraints"])
+        let quietHours = extractQuietHours(from: pillarData["quietHours"] ?? pillarData["quiet_hours"])
+        let wisdom = (pillarData["wisdom"] as? String)?.nilIfEmpty ?? (pillarData["wisdomText"] as? String)?.nilIfEmpty
+        let emoji = (pillarData["emoji"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "🏛️"
         let pillar = Pillar(
-            name: pillarData["name"] as? String ?? "New Pillar",
-            description: pillarData["description"] as? String ?? "AI-created pillar",
-            type: PillarType(rawValue: pillarData["type"] as? String ?? "actionable") ?? .actionable,
-            frequency: parseFrequency(pillarData["frequency"] as? String ?? "daily"),
-            minDuration: TimeInterval((pillarData["minDuration"] as? Int ?? 30) * 60),
-            maxDuration: TimeInterval((pillarData["maxDuration"] as? Int ?? 120) * 60),
-            preferredTimeWindows: parseTimeWindows(pillarData["preferredTimeWindows"] as? [[String: Any]] ?? []),
-            eventConsiderationEnabled: true,
-            wisdomText: pillarData["wisdomText"] as? String,
-            emoji: pillarData["emoji"] as? String ?? "🏛️"
+            name: name,
+            description: description,
+            frequency: frequency,
+            quietHours: quietHours,
+            wisdomText: wisdom,
+            values: values,
+            habits: habits,
+            constraints: constraints,
+            color: CodableColor(.purple),
+            emoji: emoji
         )
         
         dataManager.addPillar(pillar)
@@ -1291,25 +1300,99 @@ struct IntakeSection: View {
     // MARK: - Parsing Helpers
     
     private func parseFrequency(_ frequency: String) -> PillarFrequency {
-        switch frequency.lowercased() {
-        case "daily": return .daily
-        case "weekly": return .weekly(1)
-        case "as needed": return .asNeeded
-        default: return .daily
+        let lower = frequency.lowercased()
+        if lower.contains("need") { return .asNeeded }
+        if lower.contains("daily") { return .daily }
+        if lower.contains("month") {
+            let count = Int(lower.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()) ?? 1
+            return .monthly(max(1, count))
         }
+        if lower.contains("week") {
+            let count = Int(lower.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()) ?? 1
+            return .weekly(max(1, count))
+        }
+        return .weekly(1)
     }
     
-    private func parseTimeWindows(_ windowsData: [[String: Any]]) -> [TimeWindow] {
-        return windowsData.compactMap { window in
-            guard let startHour = window["startHour"] as? Int,
-                  let startMinute = window["startMinute"] as? Int,
-                  let endHour = window["endHour"] as? Int,
-                  let endMinute = window["endMinute"] as? Int else { return nil }
-            
-            return TimeWindow(startHour: startHour, startMinute: startMinute, endHour: endHour, endMinute: endMinute)
+    private func extractStringList(from raw: Any?) -> [String] {
+        if let items = raw as? [String] {
+            return sanitizeStrings(items)
         }
+        if let text = raw as? String {
+            let separators = CharacterSet(charactersIn: ",\n")
+            let parts = text.components(separatedBy: separators)
+            return sanitizeStrings(parts)
+        }
+        return []
     }
-    
+
+    private func extractQuietHours(from raw: Any?) -> [TimeWindow] {
+        if let items = raw as? [String], !items.isEmpty {
+            return sanitizedQuietHours(from: items.joined(separator: ","))
+        }
+        if let text = raw as? String {
+            return sanitizedQuietHours(from: text)
+        }
+        if let windows = raw as? [[String: Any]] {
+            let formatted = windows.compactMap { window -> String? in
+                if let start = window["start"] as? String, let end = window["end"] as? String {
+                    return "\(start)-\(end)"
+                }
+                return nil
+            }
+            return sanitizedQuietHours(from: formatted.joined(separator: ","))
+        }
+        return []
+    }
+
+    private func sanitizedQuietHours(from text: String) -> [TimeWindow] {
+        let separators = CharacterSet(charactersIn: ",\n")
+        var seen = Set<String>()
+        var windows: [TimeWindow] = []
+        for candidate in text.components(separatedBy: separators) {
+            let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, let window = parseTimeWindowString(trimmed) else { continue }
+            let key = "\(window.startHour):\(window.startMinute)-\(window.endHour):\(window.endMinute)"
+            if seen.insert(key).inserted {
+                windows.append(window)
+            }
+        }
+        return windows
+    }
+
+    private func parseTimeWindowString(_ text: String) -> TimeWindow? {
+        let parts = text.split(separator: "-")
+        guard parts.count == 2,
+              let start = parseClockString(String(parts[0])),
+              let end = parseClockString(String(parts[1])) else { return nil }
+        let startMinutes = start.hour * 60 + start.minute
+        let endMinutes = end.hour * 60 + end.minute
+        guard endMinutes > startMinutes else { return nil }
+        return TimeWindow(startHour: start.hour, startMinute: start.minute, endHour: end.hour, endMinute: end.minute)
+    }
+
+    private func parseClockString(_ text: String) -> (hour: Int, minute: Int)? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let components = trimmed.split(separator: ":")
+        guard components.count == 2,
+              let hour = Int(components[0]),
+              let minute = Int(components[1]),
+              (0..<24).contains(hour),
+              (0..<60).contains(minute) else { return nil }
+        return (hour, minute)
+    }
+
+    private func sanitizeStrings(_ items: [String]) -> [String] {
+        var seen = Set<String>()
+        return items
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .filter { value in
+                let key = value.lowercased()
+                return seen.insert(key).inserted
+            }
+    }
+
     private func parseGoalGroups(_ groupsData: [[String: Any]]) -> [GoalGroup] {
         return groupsData.compactMap { group in
             guard let name = group["name"] as? String,
@@ -1837,22 +1920,15 @@ struct AIOutgoSection: View {
     }
     
     private func calculatePillarAdherence() -> Double {
-        let actionablePillars = dataManager.appState.pillars.filter(\.isActionable)
-        guard !actionablePillars.isEmpty else { return 7.0 }
-        
-        // Simple calculation based on how recently pillar events were created
-        let now = Date()
-        let adherenceScores = actionablePillars.map { pillar in
-            guard let lastEvent = pillar.lastEventDate else { return 3.0 }
-            let daysSince = now.timeIntervalSince(lastEvent) / 86400
-            
-            switch pillar.frequency {
-            case .daily: return daysSince <= 1 ? 10.0 : max(0, 10 - daysSince)
-            case .weekly: return daysSince <= 7 ? 10.0 : max(0, 10 - (daysSince / 7))
-            default: return 7.0
-            }
+        let pillars = dataManager.appState.pillars
+        guard !pillars.isEmpty else { return 7.0 }
+
+        let adherenceScores = pillars.map { pillar -> Double in
+            let signalCount = Double(pillar.values.count + pillar.habits.count + pillar.constraints.count)
+            let quietBonus = pillar.quietHours.isEmpty ? 0.0 : 1.0
+            return min(10.0, 5.0 + signalCount * 0.8 + quietBonus)
         }
-        
+
         return adherenceScores.reduce(0, +) / Double(adherenceScores.count)
     }
 }
@@ -2281,4 +2357,3 @@ struct IntakeQuestionDetailView: View {
         .frame(width: 500, height: 600)
     }
 }
-

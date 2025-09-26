@@ -70,7 +70,8 @@ struct MindPanel: View {
                             .environmentObject(dataManager)
                     }
                     .padding(.horizontal, 18)
-                    .padding(.vertical, 18)
+                    .padding(.top, 18)
+                    .padding(.bottom, 180)
                 }
                 .scrollIndicators(.hidden)
                 .onChange(of: mindNavigator.pendingDestination) { _, destination in
@@ -91,6 +92,11 @@ struct MindPanel: View {
         .padding(.leading, 4)
         .padding(.trailing, 8)
         .padding(.vertical, 12)
+        .overlay(alignment: .bottom) {
+            MindChatBar()
+                .padding(.horizontal, 20)
+                .padding(.bottom, 16)
+        }
     }
     
     private func applyHighlight(for destination: MindDestination) {
@@ -132,7 +138,7 @@ struct MindPanelHeader: View {
                     .fontWeight(.semibold)
                     .foregroundStyle(.primary)
                 
-                Text("Pillars • Goals • Dreams")
+                Text("Recommendations • Goals • Pillars • View")
                     .font(.caption)
                     .fontWeight(.medium)
                     .foregroundStyle(.secondary)

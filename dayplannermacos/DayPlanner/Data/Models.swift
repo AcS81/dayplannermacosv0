@@ -612,10 +612,9 @@ struct DayContext: Codable {
     let availableTime: TimeInterval
     let mood: GlassMood
     let weatherContext: String?
-    let pillarGuidance: [String] // New: guidance from principle pillars
-    let actionablePillars: [Pillar] // New: pillars that can create events
+    let pillarGuidance: [String]
     
-    init(date: Date, existingBlocks: [TimeBlock], currentEnergy: EnergyType, preferredEmojis: [String], availableTime: TimeInterval, mood: GlassMood, weatherContext: String? = nil, pillarGuidance: [String] = [], actionablePillars: [Pillar] = []) {
+    init(date: Date, existingBlocks: [TimeBlock], currentEnergy: EnergyType, preferredEmojis: [String], availableTime: TimeInterval, mood: GlassMood, weatherContext: String? = nil, pillarGuidance: [String] = []) {
         self.date = date
         self.existingBlocks = existingBlocks
         self.currentEnergy = currentEnergy
@@ -624,7 +623,6 @@ struct DayContext: Codable {
         self.mood = mood
         self.weatherContext = weatherContext
         self.pillarGuidance = pillarGuidance
-        self.actionablePillars = actionablePillars
     }
     
     var summary: String {
@@ -642,10 +640,6 @@ struct DayContext: Codable {
         
         if !pillarGuidance.isEmpty {
             summary += "\nGuiding principles: \(pillarGuidance.joined(separator: "; "))"
-        }
-        
-        if !actionablePillars.isEmpty {
-            summary += "\nActionable pillars: \(actionablePillars.map(\.name).joined(separator: ", "))"
         }
         
         return summary
@@ -771,12 +765,28 @@ struct UserPreferences: Codable {
     
     
     // AI API Configuration
+    var aiProvider: AIProvider = .local
     var openaiApiKey: String = ""
     var whisperApiKey: String = ""
-    var customApiEndpoint: String = ""
+    var customApiEndpoint: String = "http://localhost:1234"
+    var openaiModel: String = "gpt-4o-mini"
 
     // Suggestion weighting configuration
     var suggestionWeighting: SuggestionWeighting = SuggestionWeighting()
+}
+
+enum AIProvider: String, Codable, CaseIterable, Identifiable {
+    case local
+    case openAI
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .local: return "Local (LM Studio)"
+        case .openAI: return "OpenAI API"
+        }
+    }
 }
 
 struct SuggestionWeighting: Codable {
@@ -1043,39 +1053,59 @@ struct Pillar: Identifiable, Codable {
     let id: UUID
     var name: String
     var description: String
-    var type: PillarType // New: actionable vs principle
     var frequency: PillarFrequency
-    var minDuration: TimeInterval // in seconds (only for actionable pillars)
-    var maxDuration: TimeInterval // (only for actionable pillars)
-    var preferredTimeWindows: [TimeWindow]
-    var overlapRules: [OverlapRule]
-    var quietHours: [TimeWindow] // When this pillar should not be suggested
-    var eventConsiderationEnabled: Bool // New: for principles that inform AI but don't create events
-    var wisdomText: String? // New: core wisdom/principles for AI guidance
+    var quietHours: [TimeWindow]
+    var wisdomText: String?
+    var values: [String]
+    var habits: [String]
+    var constraints: [String]
     var color: CodableColor
-    var emoji: String // Visual identifier shared with related goals/chains/events
-    var relatedGoalId: UUID? // Link to related goal
-    var lastEventDate: Date? // Track when pillar events were last created
-    
-    init(id: UUID = UUID(), name: String, description: String, type: PillarType = .actionable, frequency: PillarFrequency, minDuration: TimeInterval = 1800, maxDuration: TimeInterval = 7200, preferredTimeWindows: [TimeWindow] = [], overlapRules: [OverlapRule] = [], quietHours: [TimeWindow] = [], eventConsiderationEnabled: Bool = false, wisdomText: String? = nil, color: CodableColor = CodableColor(.blue), emoji: String = "🏛️", relatedGoalId: UUID? = nil) {
+    var emoji: String
+    var relatedGoalId: UUID?
+    var createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        description: String,
+        type: PillarType = .principle,
+        frequency: PillarFrequency,
+        minDuration: TimeInterval = 0,
+        maxDuration: TimeInterval = 0,
+        preferredTimeWindows: [TimeWindow] = [],
+        overlapRules: [OverlapRule] = [],
+        quietHours: [TimeWindow] = [],
+        eventConsiderationEnabled: Bool = true,
+        wisdomText: String? = nil,
+        values: [String] = [],
+        habits: [String] = [],
+        constraints: [String] = [],
+        color: CodableColor = CodableColor(.blue),
+        emoji: String = "🏛️",
+        relatedGoalId: UUID? = nil,
+        createdAt: Date = Date()
+    ) {
         self.id = id
         self.name = name
         self.description = description
-        self.type = type
         self.frequency = frequency
-        self.minDuration = minDuration
-        self.maxDuration = maxDuration
-        self.preferredTimeWindows = preferredTimeWindows
-        self.overlapRules = overlapRules
         self.quietHours = quietHours
-        self.eventConsiderationEnabled = eventConsiderationEnabled
         self.wisdomText = wisdomText
+        self.values = values
+        self.habits = habits
+        self.constraints = constraints
         self.color = color
         self.emoji = emoji
         self.relatedGoalId = relatedGoalId
-        self.lastEventDate = nil
+        self.createdAt = createdAt
+        _ = type
+        _ = minDuration
+        _ = maxDuration
+        _ = preferredTimeWindows
+        _ = overlapRules
+        _ = eventConsiderationEnabled
     }
-    
+
     var frequencyDescription: String {
         switch frequency {
         case .daily: return "Daily"
@@ -1084,40 +1114,62 @@ struct Pillar: Identifiable, Codable {
         case .asNeeded: return "As needed"
         }
     }
-    
-    var isActionable: Bool {
-        return type == .actionable
-    }
-    
-    var isPrinciple: Bool {
-        return type == .principle
-    }
-    
-    /// Get the wisdom context for AI - combines description and wisdom text
+
+    /// Guidance text summarises the principle for the AI engine.
     var aiGuidanceText: String {
-        let base = description
+        var components: [String] = []
+        components.append(description)
         if let wisdom = wisdomText, !wisdom.isEmpty {
-            return "\(base)\n\nCore principle: \(wisdom)"
+            components.append("Core principle: \(wisdom)")
         }
-        return base
+        if !values.isEmpty {
+            components.append("Values: \(values.joined(separator: ", "))")
+        }
+        if !habits.isEmpty {
+            components.append("Habits to encourage: \(habits.joined(separator: ", "))")
+        }
+        if !constraints.isEmpty {
+            components.append("Constraints: \(constraints.joined(separator: ", "))")
+        }
+        if !quietHours.isEmpty {
+            let windowText = quietHours.map { $0.description }.joined(separator: ", ")
+            components.append("Quiet hours to protect: \(windowText)")
+        }
+        return components.joined(separator: "\n\n")
     }
+
+    // Legacy compatibility surface; pillars are principle-only but some views still expect these accessors.
+    var type: PillarType { .principle }
+    var minDuration: TimeInterval { 0 }
+    var maxDuration: TimeInterval { 0 }
+    var preferredTimeWindows: [TimeWindow] { [] }
+    var overlapRules: [OverlapRule] { [] }
+    var eventConsiderationEnabled: Bool { true }
+    var isActionable: Bool { false }
+    var isPrinciple: Bool { true }
 }
 
 enum PillarType: String, Codable, CaseIterable {
-    case actionable = "Actionable" // Creates events/time blocks
-    case principle = "Principle"   // Guides AI decisions but doesn't create events
-    
+    case actionable = "Actionable"
+    case principle = "Principle"
+
+    static var allCases: [PillarType] { [.principle] }
+
     var description: String {
         switch self {
-        case .actionable: return "Creates scheduled activities"
-        case .principle: return "Guides AI decisions and suggestions"
+        case .actionable:
+            return "Creates scheduled activities (legacy)"
+        case .principle:
+            return "Guides AI decisions and suggestions"
         }
     }
-    
+
     var icon: String {
         switch self {
-        case .actionable: return "calendar.badge.plus"
-        case .principle: return "lightbulb"
+        case .actionable:
+            return "calendar.badge.plus"
+        case .principle:
+            return "lightbulb"
         }
     }
 }
@@ -1160,10 +1212,10 @@ struct TimeWindow: Codable {
 }
 
 enum OverlapRule: Codable {
-    case cannotOverlap([String]) // Pillar names that cannot overlap
-    case mustFollow(String) // Must come after this pillar
-    case mustPrecede(String) // Must come before this pillar
-    case requiresBuffer(TimeInterval) // Needs buffer time after
+    case cannotOverlap([String])
+    case mustFollow(String)
+    case mustPrecede(String)
+    case requiresBuffer(TimeInterval)
 }
 
 /// Goal: Draft / On / Off; groups & tasks > suggestions
@@ -1626,46 +1678,39 @@ extension Pillar {
         [
             Pillar(
                 name: "Exercise",
-                description: "Physical activity and fitness",
+                description: "Keep energy and resilience high through movement.",
                 frequency: .daily,
-                minDuration: 1800, // 30 minutes
-                maxDuration: 7200, // 2 hours
-                preferredTimeWindows: [
-                    TimeWindow(startHour: 6, startMinute: 0, endHour: 8, endMinute: 0),
-                    TimeWindow(startHour: 17, startMinute: 0, endHour: 19, endMinute: 0)
-                ],
-                overlapRules: [.requiresBuffer(900)], // 15 min buffer
                 quietHours: [
                     TimeWindow(startHour: 22, startMinute: 0, endHour: 6, endMinute: 0)
                 ],
+                wisdomText: "Strong body, clear mind.",
+                values: ["Vitality", "Discipline"],
+                habits: ["Strength training", "Mobility work", "Walks"],
+                constraints: ["No intense workouts after 9pm"],
                 color: CodableColor(.orange)
             ),
             Pillar(
                 name: "Deep Work",
-                description: "Focused, uninterrupted work sessions",
+                description: "Protect craft blocks for meaningful output.",
                 frequency: .daily,
-                minDuration: 3600, // 1 hour
-                maxDuration: 14400, // 4 hours
-                preferredTimeWindows: [
-                    TimeWindow(startHour: 9, startMinute: 0, endHour: 12, endMinute: 0)
-                ],
-                overlapRules: [.cannotOverlap(["Meetings", "Social"])],
                 quietHours: [
                     TimeWindow(startHour: 19, startMinute: 0, endHour: 9, endMinute: 0)
                 ],
+                wisdomText: "Default to depth when energy is high.",
+                values: ["Craft", "Focus"],
+                habits: ["Block 90 minutes before lunch", "Single-task"],
+                constraints: ["No meetings before 11am"],
                 color: CodableColor(.blue)
             ),
             Pillar(
                 name: "Rest",
-                description: "Relaxation and recovery time",
+                description: "Make space to recharge and downshift.",
                 frequency: .daily,
-                minDuration: 1800, // 30 minutes
-                maxDuration: 10800, // 3 hours
-                preferredTimeWindows: [
-                    TimeWindow(startHour: 19, startMinute: 0, endHour: 22, endMinute: 0)
-                ],
-                overlapRules: [.mustFollow("Work")],
                 quietHours: [],
+                wisdomText: "Rest is fuel, not a reward.",
+                values: ["Presence", "Recovery"],
+                habits: ["Digital sunset at 9pm", "Evening stretch"],
+                constraints: ["Stop work devices by 9pm"],
                 color: CodableColor(.purple)
             )
         ]

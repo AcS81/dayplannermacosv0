@@ -16,6 +16,7 @@
 		A1234567890123456789012345678917 /* FlowGlass.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1234567890123456789012345678918 /* FlowGlass.swift */; };
 		A1234567890123456789012345678919 /* AIService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1234567890123456789012345678920 /* AIService.swift */; };
 		A1234567890123456789012345678921 /* PatternLearning.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1234567890123456789012345678922 /* PatternLearning.swift */; };
+		0E45C35E58D048D383F2E6A7 /* MindEditorModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E6C8E02B9994F52A221C8A1 /* MindEditorModels.swift */; };
 		A1234567890123456789012345678923 /* Extensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1234567890123456789012345678924 /* Extensions.swift */; };
 		A1234567890123456789012345678947 /* CalendarDayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1234567890123456789012345678948 /* CalendarDayView.swift */; };
 		D5501D093BE547E2A4A0D24A /* AppMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E0A7B64252A43DBA428AC32 /* AppMain.swift */; };
@@ -59,6 +60,7 @@
 		A1234567890123456789012345678918 /* FlowGlass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlowGlass.swift; sourceTree = "<group>"; };
 		A1234567890123456789012345678920 /* AIService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIService.swift; sourceTree = "<group>"; };
 		A1234567890123456789012345678922 /* PatternLearning.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PatternLearning.swift; sourceTree = "<group>"; };
+		6E6C8E02B9994F52A221C8A1 /* MindEditorModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindEditorModels.swift; sourceTree = "<group>"; };
 		A1234567890123456789012345678924 /* Extensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Extensions.swift; sourceTree = "<group>"; };
 		A1234567890123456789012345678925 /* DayPlanner.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = DayPlanner.entitlements; sourceTree = "<group>"; };
 		A1234567890123456789012345678948 /* CalendarDayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDayView.swift; sourceTree = "<group>"; };
@@ -188,6 +190,7 @@
 			isa = PBXGroup;
 			children = (
 				A1234567890123456789012345678922 /* PatternLearning.swift */,
+				6E6C8E02B9994F52A221C8A1 /* MindEditorModels.swift */,
 			);
 			path = Intelligence;
 			sourceTree = "<group>";
@@ -347,6 +350,7 @@
 				A1234567890123456789012345678917 /* FlowGlass.swift in Sources */,
 				A1234567890123456789012345678919 /* AIService.swift in Sources */,
 				A1234567890123456789012345678921 /* PatternLearning.swift in Sources */,
+				0E45C35E58D048D383F2E6A7 /* MindEditorModels.swift in Sources */,
 				A1234567890123456789012345678923 /* Extensions.swift in Sources */,
 				A1234567890123456789012345678947 /* CalendarDayView.swift in Sources */,
 				D5501D093BE547E2A4A0D24A /* AppMain.swift in Sources */,

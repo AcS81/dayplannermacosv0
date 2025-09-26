@@ -230,6 +230,21 @@ struct ContentView: View {
             window.titlebarAppearsTransparent = true
             window.backgroundColor = NSColor.clear
         }
+        .onAppear {
+            aiService.configure(with: dataManager.appState.preferences)
+        }
+        .onChange(of: dataManager.appState.preferences.aiProvider) { _, _ in
+            aiService.configure(with: dataManager.appState.preferences)
+        }
+        .onChange(of: dataManager.appState.preferences.customApiEndpoint) { _, _ in
+            aiService.configure(with: dataManager.appState.preferences)
+        }
+        .onChange(of: dataManager.appState.preferences.openaiApiKey) { _, _ in
+            aiService.configure(with: dataManager.appState.preferences)
+        }
+        .onChange(of: dataManager.appState.preferences.openaiModel) { _, _ in
+            aiService.configure(with: dataManager.appState.preferences)
+        }
     }
 }
 
@@ -283,8 +298,7 @@ struct StatusBar: View {
 // MARK: - Flow Glass Sidebar (Simplified)
 
 struct FlowGlassSidebar: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    
+        
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Chains")
@@ -380,8 +394,7 @@ struct ChainCard: View {
 // MARK: - Settings View
 
 struct SettingsView: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @Environment(\.dismiss) private var dismiss
+        @Environment(\.dismiss) private var dismiss
     @State private var selectedTab: SettingsTab = .general
     
     var body: some View {
@@ -485,8 +498,7 @@ struct SettingsSidebar: View {
 
 struct SettingsContent: View {
     let selectedTab: SettingsTab
-    @EnvironmentObject private var dataManager: AppDataManager
-    
+        
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -524,8 +536,7 @@ struct SettingsContent: View {
 // MARK: - Settings Sections
 
 struct GeneralSettingsView: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    
+        
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("General Preferences")
@@ -596,8 +607,7 @@ struct GeneralSettingsView: View {
 }
 
 struct AITrustSettingsView: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var safeMode = false
+        @State private var safeMode = false
     @State private var openaiApiKey = ""
     @State private var whisperApiKey = ""
     @State private var customApiEndpoint = ""
@@ -693,8 +703,7 @@ struct AITrustSettingsView: View {
 }
 
 struct CalendarSettingsView: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var eventKitEnabled = true
+        @State private var eventKitEnabled = true
     @State private var calendarSyncStatus = "Connected"
     
     var body: some View {
@@ -762,8 +771,7 @@ struct CalendarSettingsView: View {
 }
 
 struct PillarsRulesSettingsView: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var selectedPillar: Pillar?
+        @State private var selectedPillar: Pillar?
     
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -833,8 +841,7 @@ struct PillarsRulesSettingsView: View {
 }
 
 struct ChainsSettingsView: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var selectedChain: Chain?
+        @State private var selectedChain: Chain?
     
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -900,8 +907,7 @@ struct ChainsSettingsView: View {
 }
 
 struct DataHistorySettingsView: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var showingExportSheet = false
+        @State private var showingExportSheet = false
     @State private var showingHistoryLog = false
     @State private var showingImportSheet = false
     @State private var showingClearDataAlert = false
@@ -1335,8 +1341,7 @@ struct AIDiagnosticsView: View {
 
 /// New unified layout showing both calendar and mind sections simultaneously
 struct UnifiedSplitView: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @EnvironmentObject private var aiService: AIService
+        @EnvironmentObject private var aiService: AIService
     @Binding var selectedDate: Date
     @Binding var showingMindPanel: Bool // Control mind panel visibility
     @State private var showingBackfill = false
@@ -1412,8 +1417,7 @@ struct UnifiedSplitView: View {
 // MARK: - Calendar Panel
 
 struct CalendarPanel: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @EnvironmentObject private var aiService: AIService
+        @EnvironmentObject private var aiService: AIService
     @Binding var selectedDate: Date
     @Binding var showingMonthView: Bool
     @State private var showingPillarDay = false
@@ -1524,8 +1528,7 @@ struct CalendarPanel: View {
 // MARK: - Mind Panel
 
 struct MindPanel: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @EnvironmentObject private var aiService: AIService
+        @EnvironmentObject private var aiService: AIService
     @Binding var selectedTimeframe: TimeframeSelector
     
     var body: some View {
@@ -1833,8 +1836,7 @@ struct TimeframeSelectorCompact: View {
 // MARK: - Enhanced Day View
 
 struct EnhancedDayView: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @Binding var selectedDate: Date
+        @Binding var selectedDate: Date
     @State private var showingBlockCreation = false
     @State private var creationTime: Date?
     @State private var draggedBlock: TimeBlock?
@@ -2078,8 +2080,7 @@ struct TimelineCanvas: View {
     let dayStartHour: Int
     let dayEndHour: Int
     let onTap: (Date) -> Void
-    @EnvironmentObject private var dataManager: AppDataManager
-    @EnvironmentObject private var aiService: AIService
+        @EnvironmentObject private var aiService: AIService
     
     private let calendar = Calendar.current
     
@@ -2324,8 +2325,7 @@ struct PreciseEventCard: View {
     let onDrag: (CGPoint) -> Void
     let onDrop: (Date) -> Void
     
-    @EnvironmentObject private var dataManager: AppDataManager
-    @EnvironmentObject private var aiService: AIService
+        @EnvironmentObject private var aiService: AIService
     @State private var dragOffset: CGSize = .zero
     @State private var isDragging = false
     @State private var showingDetails = false
@@ -2538,8 +2538,7 @@ struct FixedPositionEventCard: View {
     let onDrag: (CGPoint) -> Void
     let onDrop: (Date) -> Void
     
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var dragOffset: CGSize = .zero
+        @State private var dragOffset: CGSize = .zero
     @State private var isDragging = false
     @State private var showingDetails = false
     
@@ -2744,8 +2743,7 @@ struct FixedEventDetailsSheet: View {
     let onDelete: () -> Void
     
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var editedBlock: TimeBlock
+        @State private var editedBlock: TimeBlock
     @State private var activeTab: EventTab = .details
     @State private var showingDeleteConfirmation = false
     
@@ -2908,8 +2906,7 @@ struct NoFlashEventDetailsSheet: View {
     let onDelete: () -> Void
     
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var editedBlock: TimeBlock
+        @State private var editedBlock: TimeBlock
     @State private var activeTab: EventTab = .details
     @State private var showingDeleteConfirmation = false
     
@@ -3472,8 +3469,7 @@ struct HourWithEvents: View {
     let onBlockDrag: (TimeBlock, CGPoint) -> Void
     let onBlockDrop: (TimeBlock, Date) -> Void
     
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var isHovering = false
+        @State private var isHovering = false
     
     private let calendar = Calendar.current
     
@@ -3543,8 +3539,7 @@ struct CleanEventCard: View {
     let onDrag: (CGPoint) -> Void
     let onDrop: (Date) -> Void
     
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var dragOffset: CGSize = .zero
+        @State private var dragOffset: CGSize = .zero
     @State private var isDragging = false
     @State private var showingDetails = false
     
@@ -3716,8 +3711,7 @@ struct EnhancedHourSlot: View {
     let onBlockDrag: (TimeBlock, CGPoint) -> Void
     let onBlockDrop: (TimeBlock, Date) -> Void
     
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var isHovering = false
+        @State private var isHovering = false
     
     private var hourTime: Date {
         let calendar = Calendar.current
@@ -3883,8 +3877,7 @@ struct EnhancedTimeBlockCard: View {
     let onDrop: (Date) -> Void
     let allBlocks: [TimeBlock] // For chain gap checking
     
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var dragOffset: CGSize = .zero
+        @State private var dragOffset: CGSize = .zero
     @State private var isDragging = false
     @State private var showingDetails = false
     @State private var activeTab: EventTab = .details
@@ -4311,8 +4304,7 @@ struct EventChainsTab: View {
     let allBlocks: [TimeBlock]
     let onAddChain: (ChainPosition) -> Void
     
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var showingChainSelector = false
+        @State private var showingChainSelector = false
     @State private var selectedPosition: ChainPosition = .after
     @State private var isGeneratingChains = false
     @State private var generatedChains: [Chain] = []
@@ -5251,8 +5243,7 @@ enum ChainInputType {
 
 struct ExistingChainsView: View {
     let onSelect: (Chain) -> Void
-    @EnvironmentObject private var dataManager: AppDataManager
-    
+        
     var body: some View {
         ScrollView {
             VStack(spacing: 8) {
@@ -5834,8 +5825,7 @@ struct CalendarDropDelegate: DropDelegate {
 // MARK: - Enhanced Mind Sections
 
 struct SuperchargedChainsSection: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @EnvironmentObject private var aiService: AIService
+        @EnvironmentObject private var aiService: AIService
     @State private var showingAISuggestions = false
     @State private var selectedChainTemplate: ChainTemplate?
     @State private var aiSuggestedChains: [Chain] = []
@@ -6777,8 +6767,7 @@ struct AIChainSuggestionsSheet: View {
 }
 
 struct CrystalPillarsSection: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var showingPillarCreator = false
+        @State private var showingPillarCreator = false
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -6825,7 +6814,7 @@ struct EmptyPillarsCard: View {
                     .font(.subheadline)
                     .fontWeight(.medium)
                 
-                Text("Pillars are recurring activities that AI can automatically schedule for you")
+                Text("Pillars are core principles that bias every recommendation")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -6855,455 +6844,533 @@ struct EmptyPillarsCard: View {
 struct ComprehensivePillarEditorSheet: View {
     let pillar: Pillar
     let onPillarUpdated: (Pillar) -> Void
-    @EnvironmentObject private var dataManager: AppDataManager
-    @EnvironmentObject private var aiService: AIService
-    @Environment(\.dismiss) private var dismiss
-    
+        @Environment(\.dismiss) private var dismiss
+
     @State private var name: String
-    @State private var description: String
-    @State private var type: PillarType
-    @State private var frequency: PillarFrequency
-    @State private var minDuration: TimeInterval
-    @State private var maxDuration: TimeInterval
-    @State private var eventConsiderationEnabled: Bool
+    @State private var descriptionText: String
     @State private var wisdomText: String
+    @State private var valuesInput: String
+    @State private var habitsInput: String
+    @State private var constraintsInput: String
+    @State private var quietHours: [TimeWindow]
+    @State private var frequency: PillarFrequency
+    @State private var selectedColor: Color
     @State private var emoji: String
-    @State private var color: CodableColor
-    
+    @State private var showingQuietHourCreator = false
+
     init(pillar: Pillar, onPillarUpdated: @escaping (Pillar) -> Void) {
         self.pillar = pillar
         self.onPillarUpdated = onPillarUpdated
-        self._name = State(initialValue: pillar.name)
-        self._description = State(initialValue: pillar.description)
-        self._type = State(initialValue: pillar.type)
-        self._frequency = State(initialValue: pillar.frequency)
-        self._minDuration = State(initialValue: pillar.minDuration)
-        self._maxDuration = State(initialValue: pillar.maxDuration)
-        self._eventConsiderationEnabled = State(initialValue: pillar.eventConsiderationEnabled)
-        self._wisdomText = State(initialValue: pillar.wisdomText ?? "")
-        self._emoji = State(initialValue: pillar.emoji)
-        self._color = State(initialValue: pillar.color)
+        _name = State(initialValue: pillar.name)
+        _descriptionText = State(initialValue: pillar.description)
+        _wisdomText = State(initialValue: pillar.wisdomText ?? "")
+        _valuesInput = State(initialValue: pillar.values.joined(separator: "
+"))
+        _habitsInput = State(initialValue: pillar.habits.joined(separator: "
+"))
+        _constraintsInput = State(initialValue: pillar.constraints.joined(separator: "
+"))
+        _quietHours = State(initialValue: pillar.quietHours)
+        _frequency = State(initialValue: pillar.frequency)
+        _selectedColor = State(initialValue: pillar.color.color)
+        _emoji = State(initialValue: pillar.emoji)
     }
-    
+
     var body: some View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 24) {
-                    // Header
-                    VStack(spacing: 8) {
-                        Text("Edit Pillar")
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                        
-                        Text("Core life principle that guides your AI scheduling")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                    }
-                    
-                    // Name and Emoji
-                    VStack(alignment: .leading, spacing: 12) {
-                        SectionHeader(title: "Identity", subtitle: "Name and visual representation", systemImage: "person.circle", gradient: LinearGradient(colors: [.blue, .purple], startPoint: .leading, endPoint: .trailing))
-                        
-                        HStack(spacing: 12) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Emoji")
-                                    .font(.caption)
-                                    .fontWeight(.medium)
-                                
-                                EmojiPickerButton(selectedEmoji: $emoji)
-                            }
-                            
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Name")
-                                    .font(.caption)
-                                    .fontWeight(.medium)
-                                
-                                TextField("e.g., Exercise, Deep Work", text: $name)
-                                    .textFieldStyle(.roundedBorder)
-                            }
-                        }
-                        
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Description")
-                                .font(.caption)
-                                .fontWeight(.medium)
-                            
-                            TextField("What this pillar represents in your life", text: $description)
-                                .textFieldStyle(.roundedBorder)
-                        }
-                    }
-                    .padding(16)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-                    
-                    // Type and Frequency
-                    VStack(alignment: .leading, spacing: 12) {
-                            SectionHeader(title: "Behavior", subtitle: "How this pillar works", systemImage: "gearshape", gradient: LinearGradient(colors: [.green, .blue], startPoint: .leading, endPoint: .trailing))
-                        
-                        Picker("Type", selection: $type) {
-                            ForEach(PillarType.allCases, id: \.self) { pillarType in
-                                Text(pillarType.rawValue).tag(pillarType)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        
-                        Text(type.description)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        
-                        if type == .actionable {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Frequency")
-                                    .font(.caption)
-                                    .fontWeight(.medium)
-                                
-                                Picker("Frequency", selection: $frequency) {
-                                    ForEach(PillarFrequency.allCases, id: \.self) { freq in
-                                        Text(freq.displayName).tag(freq)
-                                    }
-                                }
-                                .pickerStyle(.menu)
-                                
-                                HStack(spacing: 12) {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Min Duration")
-                                            .font(.caption)
-                                            .fontWeight(.medium)
-                                        
-                                        Stepper("\(Int(minDuration/60))m", value: Binding(
-                                            get: { Int(minDuration/60) },
-                                            set: { minDuration = TimeInterval($0 * 60) }
-                                        ), in: 5...240, step: 5)
-                                        .font(.caption)
-                                    }
-                                    
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Max Duration")
-                                            .font(.caption)
-                                            .fontWeight(.medium)
-                                        
-                                        Stepper("\(Int(maxDuration/60))m", value: Binding(
-                                            get: { Int(maxDuration/60) },
-                                            set: { maxDuration = TimeInterval($0 * 60) }
-                                        ), in: 15...480, step: 15)
-                                        .font(.caption)
-                                    }
-                                }
-                            }
-                            
-                        }
-                        
-                        if type == .principle {
-                            Toggle("Consider for AI guidance", isOn: $eventConsiderationEnabled)
-                                .font(.caption)
-                        }
-                    }
-                    .padding(16)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-                    
-                    // Wisdom Text (for principles)
-                    if type == .principle {
-                        VStack(alignment: .leading, spacing: 12) {
-                            SectionHeader(title: "Wisdom", subtitle: "Core principle for AI guidance", systemImage: "lightbulb", gradient: LinearGradient(colors: [.yellow, .orange], startPoint: .leading, endPoint: .trailing))
-                            
-                            TextField("The deeper meaning or principle behind this pillar", text: $wisdomText, axis: .vertical)
-                                .textFieldStyle(.roundedBorder)
-                                .lineLimit(2...4)
-                        }
-                        .padding(16)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-                    }
+                    identitySection
+                    cadenceSection
+                    MultiLineTagEditor(
+                        title: "Values",
+                        subtitle: "Principles this pillar defends",
+                        placeholder: "One value per line",
+                        text: $valuesInput
+                    )
+                    MultiLineTagEditor(
+                        title: "Habits",
+                        subtitle: "Patterns to encourage",
+                        placeholder: "e.g. Weekly review",
+                        text: $habitsInput
+                    )
+                    MultiLineTagEditor(
+                        title: "Constraints",
+                        subtitle: "Guardrails to respect",
+                        placeholder: "e.g. No calls after 6pm",
+                        text: $constraintsInput
+                    )
+                    quietHoursSection
+                    colorSection
                 }
-                .padding(20)
+                .padding(24)
             }
-            // .navigationBarHidden(true) // Not available on macOS
+            .navigationTitle("Edit Pillar")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { savePillar() }
+                        .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
         }
-        // .navigationViewStyle(.stack) // Not available on macOS
-        .frame(width: 600, height: 700)
-        .overlay(alignment: .topTrailing) {
-            Button("Done") {
-                savePillar()
-                dismiss()
+        .frame(width: 640, height: 720)
+        .sheet(isPresented: $showingQuietHourCreator) {
+            TimeWindowCreatorSheet { window in
+                quietHours.append(window)
+                showingQuietHourCreator = false
             }
-            .buttonStyle(.borderedProminent)
-            .padding()
-        }
-        .overlay(alignment: .topLeading) {
-            Button("Cancel") {
-                dismiss()
-            }
-            .buttonStyle(.bordered)
-            .padding()
         }
     }
-    
+
+    private var identitySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(
+                title: "Identity",
+                subtitle: "What this pillar represents",
+                systemImage: "person.circle",
+                gradient: LinearGradient(colors: [.blue, .purple], startPoint: .leading, endPoint: .trailing)
+            )
+
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Emoji")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                    EmojiPickerButton(selectedEmoji: $emoji)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Name")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                    TextField("Deep Work, Restoration", text: $name)
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Description")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                TextField("Short summary of this principle", text: $descriptionText, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(2...4)
+            }
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var cadenceSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(
+                title: "Guidance",
+                subtitle: "Cadence and wisdom",
+                systemImage: "sparkles",
+                gradient: LinearGradient(colors: [.purple, .pink], startPoint: .leading, endPoint: .trailing)
+            )
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Desired cadence")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                Picker("Cadence", selection: $frequency) {
+                    ForEach(PillarFrequency.allCases, id: \.self) { freq in
+                        Text(freq.displayName).tag(freq)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Principle / wisdom")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                TextField("Optional statement the AI should remember", text: $wisdomText, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(2...3)
+            }
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var quietHoursSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(
+                title: "Quiet Hours",
+                subtitle: "Protect windows the AI should avoid",
+                systemImage: "moon.zzz",
+                gradient: LinearGradient(colors: [.indigo, .blue], startPoint: .leading, endPoint: .trailing)
+            )
+
+        if quietHours.isEmpty {
+                Text("No quiet hours defined")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(quietHours.enumerated()), id: \.offset) { index, window in
+                    HStack {
+                        Text(window.description)
+                            .font(.caption)
+                            .fontWeight(.medium)
+                        Spacer()
+                        Button(role: .destructive) {
+                            quietHours.remove(at: index)
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    .padding(8)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+
+            Button {
+                showingQuietHourCreator = true
+            } label: {
+                Label("Add quiet hours", systemImage: "plus")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var colorSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(
+                title: "Accent",
+                subtitle: "Visual identity",
+                systemImage: "paintpalette",
+                gradient: LinearGradient(colors: [.orange, .pink], startPoint: .leading, endPoint: .trailing)
+            )
+
+            ColorPicker("Accent color", selection: $selectedColor, supportsOpacity: false)
+                .labelsHidden()
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
     private func savePillar() {
-        let updatedPillar = Pillar(
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
+
+        let updated = Pillar(
             id: pillar.id,
-            name: name,
-            description: description,
-            type: type,
+            name: trimmedName,
+            description: descriptionText.trimmingCharacters(in: .whitespacesAndNewlines),
+            type: .principle,
             frequency: frequency,
-            minDuration: minDuration,
-            maxDuration: maxDuration,
+            minDuration: pillar.minDuration,
+            maxDuration: pillar.maxDuration,
             preferredTimeWindows: pillar.preferredTimeWindows,
             overlapRules: pillar.overlapRules,
-            quietHours: pillar.quietHours,
-            eventConsiderationEnabled: eventConsiderationEnabled,
-            wisdomText: wisdomText.isEmpty ? nil : wisdomText,
-            color: color,
-            emoji: emoji.isEmpty ? "🏛️" : emoji,
+            quietHours: quietHours,
+            eventConsiderationEnabled: false,
+            wisdomText: wisdomText.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+            values: parseList(valuesInput),
+            habits: parseList(habitsInput),
+            constraints: parseList(constraintsInput),
+            color: CodableColor(selectedColor),
+            emoji: emoji.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "🏛️",
             relatedGoalId: pillar.relatedGoalId
         )
-        
-        onPillarUpdated(updatedPillar)
+
+        onPillarUpdated(updated)
+        dismiss()
+    }
+
+    private func parseList(_ raw: String) -> [String] {
+        raw
+            .split(whereSeparator: { $0.isNewline || $0 == "," })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+}
+
+
+
+private struct MultiLineTagEditor: View {
+    let title: String
+    let subtitle: String
+    let placeholder: String
+    @Binding var text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(
+                title: title,
+                subtitle: subtitle,
+                systemImage: "tag",
+                gradient: LinearGradient(colors: [.teal, .blue], startPoint: .leading, endPoint: .trailing)
+            )
+
+            ZStack(alignment: .topLeading) {
+                if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(placeholder)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                }
+
+                TextEditor(text: $text)
+                    .padding(8)
+                    .background(.clear)
+            }
+            .frame(minHeight: 100)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(.white.opacity(0.08), lineWidth: 1)
+            )
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 }
 
 struct ComprehensivePillarCreatorSheet: View {
     let onPillarCreated: (Pillar) -> Void
-    @EnvironmentObject private var dataManager: AppDataManager
-    @EnvironmentObject private var aiService: AIService
-    @Environment(\.dismiss) private var dismiss
-    
-    @State private var pillarName = ""
-    @State private var pillarDescription = ""
-    @State private var wisdomText = ""
-    @State private var selectedFrequency: PillarFrequency = .daily
-    @State private var minDuration = 30
-    @State private var maxDuration = 120
-    @State private var isPrincipleOnly = false
-    @State private var selectedColor: Color = .blue
-    @State private var selectedEmoji = "🏛️"
-    @State private var relatedGoalId: UUID?
-    @State private var isGeneratingAI = false
-    @State private var aiSuggestions = ""
-    
+        @Environment(\.dismiss) private var dismiss
+
+    @State private var name: String = ""
+    @State private var descriptionText: String = ""
+    @State private var wisdomText: String = ""
+    @State private var valuesInput: String = ""
+    @State private var habitsInput: String = ""
+    @State private var constraintsInput: String = ""
+    @State private var quietHours: [TimeWindow] = []
+    @State private var frequency: PillarFrequency = .weekly(1)
+    @State private var selectedColor: Color = .purple
+    @State private var emoji: String = "🏛️"
+    @State private var showingQuietHourCreator = false
+
     var body: some View {
         NavigationView {
             ScrollView {
-                VStack(spacing: 20) {
-                    // Basic info
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Basic Information")
-                            .font(.headline)
-                            .fontWeight(.semibold)
-                        
-                        HStack(spacing: 12) {
-                            TextField("Pillar name", text: $pillarName)
-                                    .textFieldStyle(.roundedBorder)
-                                    .onChange(of: pillarName) { _, _ in
-                                        generateAISuggestions()
-                                }
-                            
-                            // Emoji picker
-                            EmojiPickerButton(selectedEmoji: $selectedEmoji)
-                        }
-                        
-                        TextField("Description", text: $pillarDescription, axis: .vertical)
-                            .textFieldStyle(.roundedBorder)
-                            .lineLimit(2...4)
-                        
-                        // Principle vs actionable toggle
-                        VStack(alignment: .leading, spacing: 8) {
-                            Toggle("Principle only (guides AI, doesn't create events)", isOn: $isPrincipleOnly)
-                                        .font(.subheadline)
-                            
-                            if isPrincipleOnly {
-                                TextField("Core wisdom/principle", text: $wisdomText, axis: .vertical)
-                                    .textFieldStyle(.roundedBorder)
-                                    .lineLimit(2...4)
-                                    .help("This wisdom guides all AI decisions")
-                            }
-                        }
-                    }
-                    
-                    // Scheduling settings (only for actionable pillars)
-                    if !isPrincipleOnly {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Scheduling")
-                            .font(.headline)
-                            .fontWeight(.semibold)
-                                
-                                Picker("Frequency", selection: $selectedFrequency) {
-                                    Text("Daily").tag(PillarFrequency.daily)
-                                    Text("3x per week").tag(PillarFrequency.weekly(3))
-                                    Text("Weekly").tag(PillarFrequency.weekly(1))
-                                    Text("As needed").tag(PillarFrequency.asNeeded)
-                                }
-                                .pickerStyle(.segmented)
-                                
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                    Text("Duration: \(minDuration)-\(maxDuration) min")
-                                        .font(.subheadline)
-                                        
-                                    HStack {
-                                        Slider(value: Binding(
-                                            get: { Double(minDuration) },
-                                            set: { minDuration = Int($0) }
-                                        ), in: 15...120, step: 15)
-                                        Text("\(minDuration)m")
-                                            .frame(width: 35)
-                                    }
-                                    
-                                    HStack {
-                                        Slider(value: Binding(
-                                            get: { Double(maxDuration) },
-                                            set: { maxDuration = Int($0) }
-                                        ), in: 30...240, step: 15)
-                                        Text("\(maxDuration)m")
-                                            .frame(width: 35)
-                                    }
-                                }
-                            }
-                            
-                        }
-                    }
-                    
-                    // Goal relation
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Goal Connection")
-                                .font(.headline)
-                                .fontWeight(.semibold)
-                            
-                        Picker("Related goal", selection: $relatedGoalId) {
-                            Text("No goal connection").tag(nil as UUID?)
-                            ForEach(dataManager.appState.goals) { goal in
-                                Text(goal.title).tag(goal.id as UUID?)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                    }
-                    
-                    // AI suggestions
-                    if !aiSuggestions.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("AI Suggestions")
-                                .font(.headline)
-                                .fontWeight(.medium)
-                            
-                            Text(aiSuggestions)
-                                .font(.body)
-                                .foregroundStyle(.secondary)
-                                .padding()
-                                .background(.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-                        }
-                    }
-                    
-                    // Color picker
-                    ColorPicker("Pillar color", selection: $selectedColor)
+                VStack(spacing: 24) {
+                    identitySection
+                    cadenceSection
+                    MultiLineTagEditor(
+                        title: "Values",
+                        subtitle: "Principles this pillar defends",
+                        placeholder: "One value per line",
+                        text: $valuesInput
+                    )
+                    MultiLineTagEditor(
+                        title: "Habits",
+                        subtitle: "Patterns to encourage",
+                        placeholder: "e.g. Morning journaling",
+                        text: $habitsInput
+                    )
+                    MultiLineTagEditor(
+                        title: "Constraints",
+                        subtitle: "Guardrails to respect",
+                        placeholder: "e.g. No calls before 10am",
+                        text: $constraintsInput
+                    )
+                    quietHoursSection
+                    colorSection
                 }
                 .padding(24)
             }
-            .navigationTitle("Create Pillar")
+            .navigationTitle("New Pillar")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
-                
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Create & Auto-populate") {
-                        createPillarWithAI()
-                    }
-                .disabled(pillarName.isEmpty)
-            }
-            }
-        }
-        .frame(width: 600, height: 700)
-    }
-    
-    private func generateAISuggestions() {
-        guard !pillarName.isEmpty else { return }
-        
-        isGeneratingAI = true
-        
-        Task {
-            let prompt = """
-            User creating pillar: "\(pillarName)"
-            
-            Suggest optimal:
-            - Description (1 sentence)
-            - Frequency (daily/weekly/etc)
-            - Duration range
-            - Whether this should be principle-only or actionable
-            
-            Brief response.
-            """
-            
-            do {
-                let context = dataManager.createEnhancedContext()
-                let response = try await aiService.processMessage(prompt, context: context)
-                
-                await MainActor.run {
-                    aiSuggestions = response.text
-                    isGeneratingAI = false
-                }
-            } catch {
-                await MainActor.run {
-                    aiSuggestions = "This looks like a good pillar. Consider if it should create events or just guide decisions."
-                    isGeneratingAI = false
+                    Button("Create") { createPillar() }
+                        .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
+        .frame(width: 640, height: 720)
+        .sheet(isPresented: $showingQuietHourCreator) {
+            TimeWindowCreatorSheet { window in
+                quietHours.append(window)
+                showingQuietHourCreator = false
+            }
+        }
     }
-    
-    private func createPillarWithAI() {
-        Task {
-            // First create basic pillar
-            let newPillar = Pillar(
-            name: pillarName,
-                description: pillarDescription.isEmpty ? "AI will enhance this" : pillarDescription,
-                type: isPrincipleOnly ? .principle : .actionable,
-            frequency: selectedFrequency,
-                minDuration: isPrincipleOnly ? 0 : TimeInterval(minDuration * 60),
-                maxDuration: isPrincipleOnly ? 0 : TimeInterval(maxDuration * 60),
-                eventConsiderationEnabled: true,
-                wisdomText: isPrincipleOnly ? wisdomText : nil,
-                color: CodableColor(selectedColor),
-                emoji: selectedEmoji,
-                relatedGoalId: relatedGoalId
+
+    private var identitySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(
+                title: "Identity",
+                subtitle: "Name and visual",
+                systemImage: "person.badge.plus",
+                gradient: LinearGradient(colors: [.blue, .purple], startPoint: .leading, endPoint: .trailing)
             )
-        
-            // Then enhance with AI
-            do {
-                let enhancedPillar = try await enhancePillarWithAI(newPillar)
-                
-                await MainActor.run {
-                    onPillarCreated(enhancedPillar)
+
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Emoji")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                    EmojiPickerButton(selectedEmoji: $emoji)
                 }
-            } catch {
-                await MainActor.run {
-        onPillarCreated(newPillar)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Name")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                    TextField("Focus, Family", text: $name)
+                        .textFieldStyle(.roundedBorder)
                 }
             }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Description")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                TextField("Short explanation of this pillar", text: $descriptionText, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(2...4)
+            }
         }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
-    
-    private func enhancePillarWithAI(_ pillar: Pillar) async throws -> Pillar {
-        let context = dataManager.createEnhancedContext()
-        let prompt = """
-        Enhance this pillar based on user patterns:
-        Name: \(pillar.name)
-        Type: \(pillar.type.rawValue)
-        
-        User context: \(context.summary)
-        
-        Provide enhanced description and if principle, core wisdom text.
-        """
-        
-        let response = try await aiService.processMessage(prompt, context: context)
-        
-        var enhanced = pillar
-        enhanced.description = response.text
-        if pillar.isPrinciple && enhanced.wisdomText?.isEmpty != false {
-            enhanced.wisdomText = "Live by: \(response.text)"
+
+    private var cadenceSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(
+                title: "Guidance",
+                subtitle: "Cadence and wisdom",
+                systemImage: "sparkles",
+                gradient: LinearGradient(colors: [.purple, .pink], startPoint: .leading, endPoint: .trailing)
+            )
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Desired cadence")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                Picker("Cadence", selection: $frequency) {
+                    ForEach(PillarFrequency.allCases, id: \.self) { freq in
+                        Text(freq.displayName).tag(freq)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Principle / wisdom")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                TextField("Optional guidance statement", text: $wisdomText, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(2...3)
+            }
         }
-        
-        return enhanced
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var quietHoursSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(
+                title: "Quiet Hours",
+                subtitle: "When should the AI hold back?",
+                systemImage: "moon.zzz",
+                gradient: LinearGradient(colors: [.indigo, .blue], startPoint: .leading, endPoint: .trailing)
+            )
+
+            if quietHours.isEmpty {
+                Text("Optional — add protected windows if this pillar needs quiet space")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(quietHours.enumerated()), id: \.offset) { index, window in
+                    HStack {
+                        Text(window.description)
+                            .font(.caption)
+                            .fontWeight(.medium)
+                        Spacer()
+                        Button(role: .destructive) {
+                            quietHours.remove(at: index)
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    .padding(8)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+
+            Button {
+                showingQuietHourCreator = true
+            } label: {
+                Label("Add quiet hours", systemImage: "plus")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var colorSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(
+                title: "Accent",
+                subtitle: "Badge color",
+                systemImage: "paintpalette",
+                gradient: LinearGradient(colors: [.orange, .pink], startPoint: .leading, endPoint: .trailing)
+            )
+
+            ColorPicker("Accent color", selection: $selectedColor, supportsOpacity: false)
+                .labelsHidden()
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func createPillar() {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
+
+        let newPillar = Pillar(
+            name: trimmedName,
+            description: descriptionText.trimmingCharacters(in: .whitespacesAndNewlines),
+            type: .principle,
+            frequency: frequency,
+            minDuration: 1800,
+            maxDuration: 3600,
+            preferredTimeWindows: [],
+            overlapRules: [],
+            quietHours: quietHours,
+            eventConsiderationEnabled: false,
+            wisdomText: wisdomText.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+            values: parseList(valuesInput),
+            habits: parseList(habitsInput),
+            constraints: parseList(constraintsInput),
+            color: CodableColor(selectedColor),
+            emoji: emoji.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "🏛️"
+        )
+
+        onPillarCreated(newPillar)
+        dismiss()
+    }
+
+    private func parseList(_ raw: String) -> [String] {
+        raw
+            .split(whereSeparator: { $0.isNewline || $0 == "," })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 }
-
 struct TimeWindowCreatorSheet: View {
     let onWindowCreated: (TimeWindow) -> Void
     
@@ -7408,8 +7475,7 @@ struct TimeWindowCreatorSheet: View {
 
 struct EnhancedPillarCard: View {
     let pillar: Pillar
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var isHovering = false
+        @State private var isHovering = false
     @State private var showingPillarDetail = false
     
     var body: some View {
@@ -7458,8 +7524,7 @@ struct EnhancedPillarCard: View {
 }
 
 struct EnhancedGoalsSection: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @EnvironmentObject private var aiService: AIService
+        @EnvironmentObject private var aiService: AIService
     @State private var showingGoalCreator = false
     @State private var showingGoalBreakdown = false
     @State private var selectedGoal: Goal?
@@ -7582,8 +7647,7 @@ struct EnhancedGoalsSection: View {
 }
 
 struct AuroraDreamBuilderSection: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var showingDreamBuilder = false
+        @State private var showingDreamBuilder = false
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -8188,8 +8252,7 @@ struct AIGoalBreakdownSheet: View {
     let goal: Goal
     let onActionsGenerated: ([GoalBreakdownAction]) -> Void
     @EnvironmentObject private var aiService: AIService
-    @EnvironmentObject private var dataManager: AppDataManager
-    @Environment(\.dismiss) private var dismiss
+        @Environment(\.dismiss) private var dismiss
     
     @State private var editedGoal: Goal
     @State private var breakdownActions: [GoalBreakdownAction] = []
@@ -8779,8 +8842,7 @@ struct AnimatedSettingsStrip: View {
 // MARK: - Calendar Tab View
 
 struct CalendarTabView: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @EnvironmentObject private var aiService: AIService
+        @EnvironmentObject private var aiService: AIService
     @State private var showingBackfill = false
     @Binding var selectedDate: Date // Receive shared date state
     
@@ -8852,8 +8914,7 @@ struct CalendarControlsBar: View {
 // MARK: - Right Rail View
 
 struct RightRailView: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @EnvironmentObject private var aiService: AIService
+        @EnvironmentObject private var aiService: AIService
     @State private var selectedSection: RightRailSection = .suggestions
     
     var body: some View {
@@ -8929,8 +8990,7 @@ struct RightRailHeader: View {
 // MARK: - Right Rail Sections
 
 struct ManualCreationSection: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var showingBlockCreation = false
+        @State private var showingBlockCreation = false
     @State private var showingChainCreation = false
     
     var body: some View {
@@ -8990,8 +9050,7 @@ struct ManualCreationSection: View {
 }
 
 struct SuggestionsSection: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @EnvironmentObject private var aiService: AIService
+        @EnvironmentObject private var aiService: AIService
     @State private var suggestions: [Suggestion] = []
     @State private var isLoading = false
     
@@ -9088,8 +9147,7 @@ struct SuggestionsSection: View {
 }
 
 struct RescheduleSection: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    
+        
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -9229,8 +9287,7 @@ struct RescheduleCard: View {
 // MARK: - Backfill View
 
 struct EnhancedBackfillView: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @EnvironmentObject private var aiService: AIService
+        @EnvironmentObject private var aiService: AIService
     @Environment(\.dismiss) private var dismiss
     
     @State private var selectedTimeframe: BackfillTimeframe = .today
@@ -10053,8 +10110,7 @@ struct BackfillActionsBar: View {
 
 struct BackfillTemplatesView: View {
     let selectedDate: Date
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var templates: [BackfillTemplate] = []
+        @State private var templates: [BackfillTemplate] = []
     
     var body: some View {
         VStack(spacing: 12) {
@@ -10129,8 +10185,7 @@ struct BackfillTemplate: Identifiable {
 
 struct DraggableBackfillTemplate: View {
     let template: BackfillTemplate
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var dragOffset: CGSize = .zero
+        @State private var dragOffset: CGSize = .zero
     @State private var isDragging = false
     
     var body: some View {
@@ -10208,8 +10263,7 @@ struct DraggableBackfillTemplate: View {
 // MARK: - Pillar Day View
 
 struct PillarDayView: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @EnvironmentObject private var aiService: AIService
+        @EnvironmentObject private var aiService: AIService
     @Environment(\.dismiss) private var dismiss
     @State private var missingPillars: [Pillar] = []
     @State private var suggestedEvents: [TimeBlock] = []
@@ -10504,8 +10558,7 @@ struct MissingPillarCard: View {
 struct DraggableSuggestedEventCard: View {
     let event: TimeBlock
     let onAdd: () -> Void
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var isDragging = false
+        @State private var isDragging = false
     @State private var dragOffset: CGSize = .zero
     
     var body: some View {
@@ -10588,8 +10641,7 @@ struct DraggableSuggestedEventCard: View {
 
 struct GapFillerView: View {
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var dataManager: AppDataManager
-    @EnvironmentObject private var aiService: AIService
+        @EnvironmentObject private var aiService: AIService
     @State private var gapSuggestions: [GapSuggestion] = []
     @State private var isAnalyzing = false
     
@@ -10850,8 +10902,7 @@ struct GapSuggestionCard: View {
 // MARK: - Mind Tab View
 
 struct MindTabView: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var selectedTimeframe: TimeframeSelector = .now
+        @State private var selectedTimeframe: TimeframeSelector = .now
     
     var body: some View {
         VStack(spacing: 16) {
@@ -10881,8 +10932,7 @@ struct MindTabView: View {
 // MARK: - Action Bar View
 
 struct FloatingActionBarView: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @EnvironmentObject private var aiService: AIService
+        @EnvironmentObject private var aiService: AIService
     @StateObject private var speechService = SpeechService()
     @State private var messageText = ""
     @State private var isVoiceMode = false
@@ -11397,51 +11447,43 @@ struct FloatingActionBarView: View {
     }
     
     private func handlePillarCreation(_ response: AIResponse, message: String) {
-        if response.confidence >= 0.85 { // Lowered threshold slightly
-            // High confidence - create the pillar directly with full details
+        if response.confidence >= 0.85 {
             if let createdItem = response.createdItems?.first(where: { $0.type == .pillar }),
                let pillarData = createdItem.data as? [String: Any] {
-                
-                // Create fully populated pillar with simplified fallbacks
-                    let pillar = Pillar(
+
+                let values = (pillarData["values"] as? [String] ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+                let habits = (pillarData["habits"] as? [String] ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+                let constraints = (pillarData["constraints"] as? [String] ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+                let quietHours = parseTimeWindows(pillarData["quietHours"] as? [[String: Any]] ?? [])
+
+                let pillar = Pillar(
                     name: pillarData["name"] as? String ?? "New Pillar",
                     description: pillarData["description"] as? String ?? "AI-created pillar based on your request",
-                    type: PillarType(rawValue: pillarData["type"] as? String ?? "actionable") ?? .actionable,
-                    frequency: PillarFrequency.daily,
-                    minDuration: TimeInterval((pillarData["minDuration"] as? Int ?? 30) * 60),
-                    maxDuration: TimeInterval((pillarData["maxDuration"] as? Int ?? 120) * 60),
+                    type: .principle,
+                    frequency: parseFrequency(pillarData["frequency"] as? String ?? "weekly"),
+                    minDuration: 1800,
+                    maxDuration: 3600,
                     preferredTimeWindows: [],
                     overlapRules: [],
-                    quietHours: [],
-                    eventConsiderationEnabled: true,
-                    wisdomText: pillarData["wisdomText"] as? String,
+                    quietHours: quietHours,
+                    eventConsiderationEnabled: false,
+                    wisdomText: (pillarData["wisdom"] as? String)?.nilIfEmpty ?? (pillarData["wisdomText"] as? String)?.nilIfEmpty,
+                    values: values,
+                    habits: habits,
+                    constraints: constraints,
+                    color: CodableColor(.purple),
                     emoji: pillarData["emoji"] as? String ?? "🏛️",
                     relatedGoalId: nil
                 )
-                
-                    dataManager.addPillar(pillar)
-                
-                // Award XP for pillar creation
+
+                dataManager.addPillar(pillar)
                 dataManager.appState.addXP(20, reason: "AI created pillar")
-                
-                showEphemeralInsight("🏛️ Created \(pillar.type.rawValue.lowercased()) pillar: \(pillar.name)")
-                
-                // Suggest scheduling if it's actionable
-                if pillar.isActionable {
-                    Task {
-                        try? await Task.sleep(nanoseconds: 2_000_000_000)
-                        await MainActor.run {
-                            showEphemeralInsight("📅 Schedule '\(pillar.name)' activity?")
-                        }
-                    }
-                }
+                showEphemeralInsight("🏛️ Anchored pillar: \(pillar.name)")
             }
         } else if response.confidence >= 0.6 {
-            // Medium confidence - ask for clarification
-            showEphemeralInsight("🤔 I think you want to create a pillar. Is this a recurring activity or a guiding principle?")
+            showEphemeralInsight("🤔 Sounds like a pillar idea. Want to share the values or constraints it should protect?")
         } else {
-            // Low confidence - ask for more details
-            showEphemeralInsight("💭 Tell me more about this pillar - is it something you want to do regularly or a principle to guide decisions?")
+            showEphemeralInsight("💭 Tell me more about the principle or guardrails you want this pillar to capture.")
         }
     }
     
@@ -11891,8 +11933,7 @@ struct AIMessage: Identifiable {
 // MARK: - Day Planner View
 
 struct DayPlannerView: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @Binding var selectedDate: Date // Use shared date state
+        @Binding var selectedDate: Date // Use shared date state
     @State private var showingBlockCreation = false
     @State private var creationTime: Date?
     @State private var draggedBlock: TimeBlock?
@@ -11985,8 +12026,7 @@ struct DayPlannerView: View {
 
 struct DayViewHeader: View {
     @Binding var selectedDate: Date
-    @EnvironmentObject private var dataManager: AppDataManager
-    
+        
     var body: some View {
         HStack {
             // Previous day
@@ -12124,8 +12164,7 @@ struct SimpleTimeBlockView: View {
     let onDrag: (CGPoint) -> Void
     let onDrop: (Date) -> Void
     
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var dragOffset: CGSize = .zero
+        @State private var dragOffset: CGSize = .zero
     @State private var isDragging = false
     @State private var showingDetails = false
     @State private var activeTab: EventTab = .details
@@ -12397,8 +12436,7 @@ struct ChainSelectorView: View {
     let baseBlock: TimeBlock
     let onChainSelected: (Chain) -> Void
     
-    @EnvironmentObject private var dataManager: AppDataManager
-    @EnvironmentObject private var aiService: AIService
+        @EnvironmentObject private var aiService: AIService
     @Environment(\.dismiss) private var dismiss
     
     @State private var aiSuggestedChains: [Chain] = []
@@ -12773,8 +12811,7 @@ struct ExistingChainCard: View {
 }
 
 struct MonthView: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @EnvironmentObject private var aiService: AIService
+        @EnvironmentObject private var aiService: AIService
     @State private var selectedDates: Set<Date> = []
     @State private var currentMonth = Date()
     @State private var dateSelectionRange: (start: Date?, end: Date?) = (nil, nil)
@@ -13302,8 +13339,7 @@ struct TimeframeSelectorView: View {
 }
 
 struct ChainsSection: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var showingChainCreator = false
+        @State private var showingChainCreator = false
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -13545,8 +13581,7 @@ struct ChainBlockEditRow: View {
 }
 
 struct PillarsSection: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var showingPillarCreator = false
+        @State private var showingPillarCreator = false
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -13602,8 +13637,7 @@ struct PillarsSection: View {
 
 struct PillarRowView: View {
     let pillar: Pillar
-    @EnvironmentObject private var dataManager: AppDataManager
-    
+        
     var body: some View {
         HStack(spacing: 12) {
             Circle()
@@ -13699,8 +13733,7 @@ struct PillarCreationView: View {
 }
 
 struct GoalsSection: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var showingGoalCreator = false
+        @State private var showingGoalCreator = false
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -13955,8 +13988,7 @@ struct GoalCreationView: View {
 }
 
 struct DreamBuilderSection: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @EnvironmentObject private var aiService: AIService
+        @EnvironmentObject private var aiService: AIService
     @State private var selectedConcepts: Set<UUID> = []
     @State private var showingMergeView = false
     @State private var showingDreamChat = false
@@ -14386,8 +14418,7 @@ struct DreamMergeView: View {
 // MARK: - Dream Chat View
 
 struct DreamChatView: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @EnvironmentObject private var aiService: AIService
+        @EnvironmentObject private var aiService: AIService
     @Environment(\.dismiss) private var dismiss
     
     @State private var chatMessages: [DreamChatMessage] = []
@@ -14729,8 +14760,7 @@ struct DreamConceptView: View {
 }
 
 struct IntakeSection: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @EnvironmentObject private var aiService: AIService
+        @EnvironmentObject private var aiService: AIService
     @State private var showingQuestionDetail: IntakeQuestion?
     @State private var showingAIInsights = false
     @State private var generateQuestionsCounter = 0
@@ -15067,19 +15097,30 @@ struct IntakeSection: View {
             return
         }
         
+        let values = (pillarData["values"] as? [String] ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        let habits = (pillarData["habits"] as? [String] ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        let constraints = (pillarData["constraints"] as? [String] ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        let quietHours = parseTimeWindows(pillarData["quietHours"] as? [[String: Any]] ?? [])
+
         let pillar = Pillar(
             name: pillarData["name"] as? String ?? "New Pillar",
             description: pillarData["description"] as? String ?? "AI-created pillar",
-            type: PillarType(rawValue: pillarData["type"] as? String ?? "actionable") ?? .actionable,
-            frequency: parseFrequency(pillarData["frequency"] as? String ?? "daily"),
-            minDuration: TimeInterval((pillarData["minDuration"] as? Int ?? 30) * 60),
-            maxDuration: TimeInterval((pillarData["maxDuration"] as? Int ?? 120) * 60),
-            preferredTimeWindows: parseTimeWindows(pillarData["preferredTimeWindows"] as? [[String: Any]] ?? []),
-            eventConsiderationEnabled: true,
-            wisdomText: pillarData["wisdomText"] as? String,
+            type: .principle,
+            frequency: parseFrequency(pillarData["frequency"] as? String ?? "weekly"),
+            minDuration: 1800,
+            maxDuration: 3600,
+            preferredTimeWindows: [],
+            overlapRules: [],
+            quietHours: quietHours,
+            eventConsiderationEnabled: false,
+            wisdomText: (pillarData["wisdom"] as? String)?.nilIfEmpty ?? (pillarData["wisdomText"] as? String)?.nilIfEmpty,
+            values: values,
+            habits: habits,
+            constraints: constraints,
+            color: CodableColor(.purple),
             emoji: pillarData["emoji"] as? String ?? "🏛️"
         )
-        
+
         dataManager.addPillar(pillar)
         coreInsight = "✅ Created pillar: \(pillar.name)"
     }
@@ -15149,15 +15190,28 @@ struct IntakeSection: View {
             switch item.type {
             case .pillar:
                 if let pillarData = item.data as? [String: Any] {
+                    let values = (pillarData["values"] as? [String] ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+                    let habits = (pillarData["habits"] as? [String] ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+                    let constraints = (pillarData["constraints"] as? [String] ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+                    let quietHours = parseTimeWindows(pillarData["quietHours"] as? [[String: Any]] ?? [])
+
                     let pillar = Pillar(
                         name: pillarData["name"] as? String ?? "New Pillar",
                         description: pillarData["description"] as? String ?? "AI-created pillar",
-                        frequency: .daily,
+                        type: .principle,
+                        frequency: parseFrequency(pillarData["frequency"] as? String ?? "weekly"),
                         minDuration: 1800,
-                        maxDuration: 7200,
+                        maxDuration: 3600,
                         preferredTimeWindows: [],
                         overlapRules: [],
-                        quietHours: []
+                        quietHours: quietHours,
+                        eventConsiderationEnabled: false,
+                        wisdomText: (pillarData["wisdom"] as? String)?.nilIfEmpty ?? (pillarData["wisdomText"] as? String)?.nilIfEmpty,
+                        values: values,
+                        habits: habits,
+                        constraints: constraints,
+                        color: CodableColor(.purple),
+                        emoji: pillarData["emoji"] as? String ?? "🏛️"
                     )
                     dataManager.addPillar(pillar)
                     createdCount += 1
@@ -15584,8 +15638,7 @@ struct IntakeSection: View {
 // MARK: - AI Outgo Section
 
 struct AIOutgoSection: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @EnvironmentObject private var aiService: AIService
+        @EnvironmentObject private var aiService: AIService
     @State private var currentWisdom: String = ""
     @State private var patterns: [String] = []
     @State private var suggestions: [String] = []
@@ -15792,8 +15845,7 @@ struct AIOutgoSection: View {
 }
 
 struct AIAnalysisView: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @EnvironmentObject private var aiService: AIService
+        @EnvironmentObject private var aiService: AIService
     @Environment(\.dismiss) private var dismiss
     @State private var analysisText = ""
     @State private var isGenerating = true
@@ -15973,8 +16025,7 @@ struct EnhancedIntakeQuestionView: View {
 // MARK: - AI Knowledge View
 
 struct AIKnowledgeView: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @Environment(\.dismiss) private var dismiss
+        @Environment(\.dismiss) private var dismiss
     
     var body: some View {
         NavigationView {
@@ -16317,8 +16368,7 @@ struct ExportDocument: FileDocument {
 }
 
 struct HistoryLogView: View {
-    @EnvironmentObject private var dataManager: AppDataManager
-    @Environment(\.dismiss) private var dismiss
+        @Environment(\.dismiss) private var dismiss
     
     var body: some View {
         NavigationView {
@@ -16359,8 +16409,7 @@ struct HistoryLogView: View {
 
 struct ChainsTemplatesView: View {
     let selectedDate: Date
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var templates: [ChainTemplate] = []
+        @State private var templates: [ChainTemplate] = []
     
     var body: some View {
         VStack(spacing: 12) {
@@ -16432,8 +16481,7 @@ struct ChainsTemplatesView: View {
 
 struct DraggableChainTemplate: View {
     let template: ChainTemplate
-    @EnvironmentObject private var dataManager: AppDataManager
-    @State private var dragOffset: CGSize = .zero
+        @State private var dragOffset: CGSize = .zero
     @State private var isDragging = false
     
     var body: some View {
@@ -16510,5 +16558,3 @@ struct DraggableChainTemplate: View {
         dataManager.applyChain(chain, startingAt: Date())
     }
 }
-
-

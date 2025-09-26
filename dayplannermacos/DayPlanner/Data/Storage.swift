@@ -13,6 +13,12 @@ import CoreLocation
 import Speech
 import AVFoundation
 
+struct MindCommandOutcome {
+    var appliedMessages: [String] = []
+    var clarification: String?
+    var hasChanges: Bool = false
+}
+
 @MainActor
 protocol OnboardingProgressDelegate: AnyObject {
     func onboardingDidCaptureMood(_ entry: MoodEntry)
@@ -754,23 +760,25 @@ class AppDataManager: ObservableObject {
     // MARK: - Pillar Operations
     
     func addPillar(_ pillar: Pillar) {
-        appState.pillars.append(pillar)
+        let normalized = normalizePillarDefinition(pillar)
+        appState.pillars.append(normalized)
         save()
         
         // Award XP for creating a pillar
-        appState.addXP(15, reason: "Created pillar: \(pillar.name)")
+        appState.addXP(15, reason: "Created pillar: \(normalized.name)")
         
-        onboardingDelegate?.onboardingDidCreatePillar(pillar)
+        onboardingDelegate?.onboardingDidCreatePillar(normalized)
     }
     
     func updatePillar(_ pillar: Pillar) {
         if let index = appState.pillars.firstIndex(where: { $0.id == pillar.id }) {
             let oldPillar = appState.pillars[index]
-            appState.pillars[index] = pillar
+            let normalized = normalizePillarDefinition(pillar)
+            appState.pillars[index] = normalized
             
             // If emoji changed, propagate to related items
-            if oldPillar.emoji != pillar.emoji {
-                propagateEmojiFromPillar(pillar)
+            if oldPillar.emoji != normalized.emoji {
+                propagateEmojiFromPillar(normalized)
             }
             save()
         }
@@ -782,17 +790,420 @@ class AppDataManager: ObservableObject {
         appState.pillarFeedbackStats.removeValue(forKey: pillarId)
         save()
     }
-    
-    
+
+    func makeMindEditorContext() -> MindEditorContext {
+        let goalSummaries = appState.goals.map { goal -> MindEditorContext.GoalSummary in
+            let nodeSummaries = goal.graph.nodes.map { node in
+                MindEditorContext.GoalSummary.NodeSummary(
+                    id: node.id,
+                    type: node.type.rawValue,
+                    title: node.title,
+                    detail: node.detail,
+                    pinned: node.pinned,
+                    weight: node.weight
+                )
+            }
+
+            return MindEditorContext.GoalSummary(
+                id: goal.id,
+                title: goal.title,
+                description: goal.description,
+                emoji: goal.emoji,
+                importance: goal.importance,
+                pinnedNodeTitles: nodeSummaries.filter { $0.pinned }.map { $0.title },
+                nodes: nodeSummaries
+            )
+        }
+
+        let pillarSummaries = appState.pillars.map { pillar -> MindEditorContext.PillarSummary in
+            MindEditorContext.PillarSummary(
+                id: pillar.id,
+                name: pillar.name,
+                description: pillar.description,
+                frequency: describeFrequency(pillar.frequency),
+                wisdom: pillar.wisdomText,
+                values: pillar.values,
+                habits: pillar.habits,
+                constraints: pillar.constraints,
+                quietHours: pillar.quietHours.map(formatTimeWindow)
+            )
+        }
+
+        return MindEditorContext(goals: goalSummaries, pillars: pillarSummaries)
+    }
+
+    func applyMindCommands(_ commands: [MindCommand]) -> MindCommandOutcome {
+        var outcome = MindCommandOutcome()
+        guard !commands.isEmpty else { return outcome }
+
+        for command in commands {
+            switch command {
+            case .createGoal(let payload):
+                var graph = GoalGraph()
+                if !payload.nodes.isEmpty {
+                    graph.nodes = payload.nodes.map { node in
+                        GoalGraphNode(
+                            id: UUID(),
+                            type: node.type,
+                            title: node.title,
+                            detail: node.detail,
+                            pinned: node.pinned,
+                            weight: node.weight ?? 0.35
+                        )
+                    }
+                    graph.history.append(GoalGraphHistoryEntry(summary: "Mind chat seeded \(graph.nodes.count) nodes"))
+                }
+
+                let goal = Goal(
+                    title: payload.title,
+                    description: payload.description ?? "",
+                    state: .on,
+                    importance: payload.importance ?? 3,
+                    groups: [],
+                    targetDate: nil,
+                    emoji: payload.emoji ?? "🎯",
+                    relatedPillarIds: resolvePillarIds(ids: payload.relatedPillarIds, names: payload.relatedPillarNames),
+                    graph: graph
+                )
+
+                addGoal(goal)
+                outcome.appliedMessages.append("Created goal \(goal.title)")
+                outcome.hasChanges = true
+
+            case .updateGoal(let payload):
+                guard var goal = findGoal(reference: payload.reference) else {
+                    outcome.appliedMessages.append("Goal not found for update")
+                    continue
+                }
+
+                var changed = false
+                if let title = payload.title, !title.isEmpty, title != goal.title {
+                    goal.title = title
+                    changed = true
+                }
+                if let description = payload.description, description != goal.description {
+                    goal.description = description
+                    changed = true
+                }
+                if let emoji = payload.emoji, emoji != goal.emoji {
+                    goal.emoji = emoji
+                    changed = true
+                }
+                if let importance = payload.importance, importance != goal.importance {
+                    goal.importance = importance
+                    changed = true
+                }
+                if let focus = payload.focus, !focus.isEmpty {
+                    goal.graph.history.append(GoalGraphHistoryEntry(summary: "Focus adjusted: \(focus)"))
+                    changed = true
+                }
+
+                if changed {
+                    updateGoal(goal)
+                    outcome.appliedMessages.append("Updated goal \(goal.title)")
+                    outcome.hasChanges = true
+                }
+
+            case .addNode(let payload):
+                guard var goal = findGoal(reference: payload.reference) else {
+                    outcome.appliedMessages.append("Goal not found for node add")
+                    continue
+                }
+                var node = GoalGraphNode(
+                    type: payload.node.type,
+                    title: payload.node.title,
+                    detail: payload.node.detail,
+                    pinned: payload.node.pinned,
+                    weight: payload.node.weight ?? 0.35
+                )
+                goal.graph.nodes.append(node)
+                goal.graph.history.append(GoalGraphHistoryEntry(summary: "Added node \(node.title)", nodeId: node.id))
+                updateGoal(goal)
+                outcome.appliedMessages.append("Added node \(node.title) to \(goal.title)")
+                outcome.hasChanges = true
+
+            case .linkNodes(let payload):
+                guard var goal = findGoal(reference: payload.reference) else {
+                    outcome.appliedMessages.append("Goal not found for linking")
+                    continue
+                }
+                let fromTitle = payload.fromTitle
+                let toTitle = payload.toTitle
+                guard let fromId = findNodeId(in: goal.graph, matching: fromTitle),
+                      let toId = findNodeId(in: goal.graph, matching: toTitle) else {
+                    outcome.appliedMessages.append("Nodes not found for linking")
+                    continue
+                }
+                let edge = GoalGraphEdge(from: fromId, to: toId, label: payload.label)
+                goal.graph.edges.append(edge)
+                goal.graph.history.append(GoalGraphHistoryEntry(summary: "Linked \(fromTitle) → \(toTitle)", nodeId: fromId))
+                updateGoal(goal)
+                outcome.appliedMessages.append("Linked nodes in \(goal.title)")
+                outcome.hasChanges = true
+
+            case .pinNode(let payload):
+                guard var goal = findGoal(reference: payload.reference),
+                      let nodeId = findNodeId(in: goal.graph, matching: payload.nodeTitle)
+                else {
+                    outcome.appliedMessages.append("Node not found for pin toggle")
+                    continue
+                }
+                var nodeIndex = goal.graph.nodes.firstIndex { $0.id == nodeId }!
+                goal.graph.nodes[nodeIndex].pinned = payload.desiredState
+                goal.graph.nodes[nodeIndex].updatedAt = Date()
+                goal.graph.history.append(
+                    GoalGraphHistoryEntry(
+                        summary: payload.desiredState ? "Pinned \(goal.graph.nodes[nodeIndex].title)" : "Unpinned \(goal.graph.nodes[nodeIndex].title)",
+                        nodeId: nodeId
+                    )
+                )
+                updateGoal(goal)
+                outcome.appliedMessages.append(payload.desiredState ? "Pinned node" : "Unpinned node")
+                outcome.hasChanges = true
+
+            case .createPillar(let payload):
+                let quietHours = parseQuietHours(payload.quietHours)
+                let pillar = Pillar(
+                    name: payload.name,
+                    description: payload.description ?? "",
+                    frequency: resolveFrequency(from: payload.frequency),
+                    quietHours: quietHours,
+                    wisdomText: payload.wisdom?.nilIfEmpty,
+                    values: sanitizePillarStrings(payload.values),
+                    habits: sanitizePillarStrings(payload.habits),
+                    constraints: sanitizePillarStrings(payload.constraints),
+                    color: CodableColor(.purple),
+                    emoji: payload.emoji ?? "🏛️"
+                )
+                addPillar(pillar)
+                outcome.appliedMessages.append("Created pillar \(pillar.name)")
+                outcome.hasChanges = true
+
+            case .updatePillar(let payload):
+                guard var pillar = findPillar(reference: payload.reference) else {
+                    outcome.appliedMessages.append("Pillar not found for update")
+                    continue
+                }
+                var changed = false
+                if let description = payload.description?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !description.isEmpty, description != pillar.description {
+                    pillar.description = description
+                    changed = true
+                }
+                if let emoji = payload.emoji, emoji != pillar.emoji {
+                    pillar.emoji = emoji
+                    changed = true
+                }
+                if let frequency = payload.frequency {
+                    let resolved = resolveFrequency(from: frequency)
+                    if resolved != pillar.frequency {
+                        pillar.frequency = resolved
+                        changed = true
+                    }
+                }
+                if let rawWisdom = payload.wisdom {
+                    let trimmed = rawWisdom.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let normalizedWisdom = trimmed.isEmpty ? nil : trimmed
+                    if normalizedWisdom != pillar.wisdomText {
+                        pillar.wisdomText = normalizedWisdom
+                        changed = true
+                    }
+                }
+                if !payload.values.isEmpty {
+                    pillar.values = mergePillarStrings(existing: pillar.values, additions: payload.values)
+                    changed = true
+                }
+                if !payload.habits.isEmpty {
+                    pillar.habits = mergePillarStrings(existing: pillar.habits, additions: payload.habits)
+                    changed = true
+                }
+                if !payload.constraints.isEmpty {
+                    pillar.constraints = mergePillarStrings(existing: pillar.constraints, additions: payload.constraints)
+                    changed = true
+                }
+                let quietHours = parseQuietHours(payload.quietHours)
+                if !quietHours.isEmpty {
+                    pillar.quietHours = normalizeTimeWindows(pillar.quietHours + quietHours)
+                    changed = true
+                }
+                if changed {
+                    updatePillar(pillar)
+                    outcome.appliedMessages.append("Updated pillar \(pillar.name)")
+                    outcome.hasChanges = true
+                }
+
+            case .clarification(let question):
+                if outcome.clarification == nil {
+                    outcome.clarification = question
+                }
+            }
+        }
+
+        return outcome
+    }
+
+    private func normalizePillarDefinition(_ pillar: Pillar) -> Pillar {
+        var normalized = pillar
+        normalized.description = pillar.description.trimmingCharacters(in: .whitespacesAndNewlines)
+        normalized.wisdomText = pillar.wisdomText?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        normalized.values = sanitizePillarStrings(pillar.values)
+        normalized.habits = sanitizePillarStrings(pillar.habits)
+        normalized.constraints = sanitizePillarStrings(pillar.constraints)
+        normalized.quietHours = normalizeTimeWindows(pillar.quietHours)
+        return normalized
+    }
+
+    private func sanitizePillarStrings(_ items: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for item in items {
+            let trimmed = item.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let key = trimmed.lowercased()
+            if !seen.contains(key) {
+                seen.insert(key)
+                result.append(trimmed)
+            }
+        }
+        return result
+    }
+
+    private func normalizeTimeWindows(_ windows: [TimeWindow]) -> [TimeWindow] {
+        var seen = Set<String>()
+        var result: [TimeWindow] = []
+        for window in windows {
+            let startHour = min(max(0, window.startHour), 23)
+            let startMinute = min(max(0, window.startMinute), 59)
+            let endHour = min(max(0, window.endHour), 23)
+            let endMinute = min(max(0, window.endMinute), 59)
+
+            let startTotal = startHour * 60 + startMinute
+            let endTotal = endHour * 60 + endMinute
+            guard endTotal > startTotal else { continue }
+
+            let normalized = TimeWindow(
+                startHour: startHour,
+                startMinute: startMinute,
+                endHour: endHour,
+                endMinute: endMinute
+            )
+            let key = "\(normalized.startHour):\(normalized.startMinute)-\(normalized.endHour):\(normalized.endMinute)"
+            if !seen.contains(key) {
+                seen.insert(key)
+                result.append(normalized)
+            }
+        }
+        return result
+    }
+
+    private func describeFrequency(_ frequency: PillarFrequency) -> String {
+        switch frequency {
+        case .daily: return "daily"
+        case .weekly(let count): return count == 1 ? "weekly" : "\(count)x per week"
+        case .monthly(let count): return count == 1 ? "monthly" : "\(count)x per month"
+        case .asNeeded: return "as_needed"
+        }
+    }
+
+    private func formatTimeWindow(_ window: TimeWindow) -> String {
+        String(format: "%02d:%02d-%02d:%02d", window.startHour, window.startMinute, window.endHour, window.endMinute)
+    }
+
+    private func resolveFrequency(from text: String?) -> PillarFrequency {
+        guard let text else { return .weekly(1) }
+        let lower = text.lowercased()
+        if lower.contains("as") && lower.contains("need") { return .asNeeded }
+        if lower.contains("daily") { return .daily }
+        if lower.contains("month") {
+            let count = extractFirstInteger(from: lower) ?? 1
+            return .monthly(max(1, count))
+        }
+        if lower.contains("week") {
+            let count = extractFirstInteger(from: lower) ?? 1
+            return .weekly(max(1, count))
+        }
+        return .weekly(1)
+    }
+
+    private func extractFirstInteger(from text: String) -> Int? {
+        let scanner = Scanner(string: text)
+        return scanner.scanInt()
+    }
+
+    private func resolvePillarIds(ids: [UUID], names: [String]) -> [UUID] {
+        var resolved = Set(ids)
+        let lowerNames = names.map { $0.lowercased() }
+        for pillar in appState.pillars where lowerNames.contains(pillar.name.lowercased()) {
+            resolved.insert(pillar.id)
+        }
+        return Array(resolved)
+    }
+
+    private func findGoal(reference: MindCommandGoalReference) -> Goal? {
+        if let id = reference.id {
+            return appState.goals.first { $0.id == id }
+        }
+        if let title = reference.title?.lowercased() {
+            return appState.goals.first { $0.title.lowercased() == title }
+        }
+        return nil
+    }
+
+    private func findPillar(reference: MindCommandPillarReference) -> Pillar? {
+        if let id = reference.id {
+            return appState.pillars.first { $0.id == id }
+        }
+        if let name = reference.name?.lowercased() {
+            return appState.pillars.first { $0.name.lowercased() == name }
+        }
+        return nil
+    }
+
+    private func findNodeId(in graph: GoalGraph, matching title: String) -> UUID? {
+        graph.nodes.first { $0.title.caseInsensitiveCompare(title) == .orderedSame }?.id
+    }
+
+    private func mergePillarStrings(existing: [String], additions: [String]) -> [String] {
+        var combined = existing
+        let sanitized = sanitizePillarStrings(additions)
+        for value in sanitized {
+            if !combined.contains(where: { $0.caseInsensitiveCompare(value) == .orderedSame }) {
+                combined.append(value)
+            }
+        }
+        return combined
+    }
+
+    private func parseQuietHours(_ descriptors: [MindQuietHourDescriptor]) -> [TimeWindow] {
+        descriptors.compactMap { descriptor in
+            guard let start = parseTime(descriptor.start), let end = parseTime(descriptor.end) else { return nil }
+            guard end.totalMinutes > start.totalMinutes else { return nil }
+            return TimeWindow(
+                startHour: start.hour,
+                startMinute: start.minute,
+                endHour: end.hour,
+                endMinute: end.minute
+            )
+        }
+    }
+
+    private func parseTime(_ string: String) -> (hour: Int, minute: Int, totalMinutes: Int)? {
+        let components = string.split(separator: ":")
+        guard components.count == 2,
+              let hour = Int(components[0]),
+              let minute = Int(components[1]),
+              (0...23).contains(hour),
+              (0...59).contains(minute) else { return nil }
+        return (hour, minute, hour * 60 + minute)
+    }
+
+
     /// Create enhanced context with pillar guidance for AI decisions
     func createEnhancedContext(date: Date = Date()) -> DayContext {
         let principleGuidance = appState.pillars
-            .filter { $0.isPrinciple }
             .map { $0.aiGuidanceText }
-        
-        let actionablePillars = appState.pillars
-            .filter { $0.isActionable }
-        
+            .filter { !$0.isEmpty }
+
         return DayContext(
             date: date,
             existingBlocks: appState.currentDay.blocks,
@@ -801,44 +1212,8 @@ class AppDataManager: ObservableObject {
             availableTime: 3600,
             mood: appState.currentDay.mood,
             weatherContext: weatherService.getWeatherContext(),
-            pillarGuidance: principleGuidance,
-            actionablePillars: actionablePillars
+            pillarGuidance: principleGuidance
         )
-    }
-    
-    private func findAvailableSlots(for pillar: Pillar) -> [TimeSlot] {
-        var availableSlots: [TimeSlot] = []
-        let calendar = Calendar.current
-        let today = Date()
-        
-        // Check today and next few days
-        for dayOffset in 0..<3 {
-            guard let targetDate = calendar.date(byAdding: .day, value: dayOffset, to: today) else { continue }
-            
-            // Get existing blocks for that day
-            let existingBlocks = appState.currentDay.blocks
-            
-            // Check each preferred time window
-            for timeWindow in pillar.preferredTimeWindows {
-                guard let windowStart = calendar.date(bySettingHour: timeWindow.startHour, minute: timeWindow.startMinute, second: 0, of: targetDate),
-                      let windowEnd = calendar.date(bySettingHour: timeWindow.endHour, minute: timeWindow.endMinute, second: 0, of: targetDate) else { continue }
-                
-                // Find gaps within this time window
-                let gapsInWindow = findGaps(in: DateInterval(start: windowStart, end: windowEnd), existingBlocks: existingBlocks)
-                
-                for gap in gapsInWindow {
-                    if gap.duration >= pillar.minDuration {
-                        availableSlots.append(TimeSlot(
-                            startTime: gap.start,
-                            endTime: gap.end,
-                            duration: gap.duration
-                        ))
-                    }
-                }
-            }
-        }
-        
-        return availableSlots
     }
     
     private func findGaps(in interval: DateInterval, existingBlocks: [TimeBlock]) -> [DateInterval] {
@@ -1440,9 +1815,6 @@ class AppDataManager: ObservableObject {
             appState.currentDay.blocks[blockIndex].relatedPillarId = pillarId
             if let pillar = appState.pillars.first(where: { $0.id == pillarId }) {
                 appState.currentDay.blocks[blockIndex].emoji = pillar.emoji
-                
-                // Update pillar's last event date
-                appState.pillars[appState.pillars.firstIndex(where: { $0.id == pillarId })!].lastEventDate = Date()
             }
         }
         

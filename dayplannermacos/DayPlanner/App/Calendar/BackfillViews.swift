@@ -1102,115 +1102,40 @@ struct PillarDayView: View {
     
     private func analyzePillarNeeds() {
         isAnalyzing = true
-        
+
         Task {
-            let actionablePillars = dataManager.appState.pillars.filter(\.isActionable)
-            var missing: [Pillar] = []
-            var suggestions: [TimeBlock] = []
-            
-            let now = Date()
-            
-            for pillar in actionablePillars {
-                let daysSinceLastEvent = pillar.lastEventDate?.timeIntervalSince(now) ?? -99999999
-                let needsEvent = shouldCreateEventForPillar(pillar, daysSince: daysSinceLastEvent / 86400)
-                
-                if needsEvent {
-                    missing.append(pillar)
-                }
-            }
-            
-            // Generate suggested events for missing pillars (separate from just listing them)
-            for pillar in missing {
-                if let timeSlot = findBestTimeSlot(for: pillar) {
-                    let suggestedEvent = TimeBlock(
-                        title: pillar.name,
-                        startTime: timeSlot.startTime,
-                        duration: pillar.minDuration,
-                        energy: .daylight,
-                        emoji: pillar.emoji,
-                        relatedPillarId: pillar.id
-                    )
-                    suggestions.append(suggestedEvent)
-                }
-            }
-            
+            let pillars = dataManager.appState.pillars
+            let needsDefinition = pillars.filter { ($0.values.isEmpty && $0.habits.isEmpty) || ($0.wisdomText?.isEmpty ?? true) }
+            let missingQuietHours = pillars.filter { $0.quietHours.isEmpty }
+            let combined = Array(Set(needsDefinition + missingQuietHours))
+
             await MainActor.run {
-                missingPillars = missing
-                suggestedEvents = suggestions
-                analysisText = generateAnalysisText(missingCount: missing.count, totalPillars: actionablePillars.count)
+                missingPillars = combined
+                suggestedEvents = []
+                analysisText = generateAnalysisText(needsDefinition: needsDefinition.count, needsQuiet: missingQuietHours.count, totalPillars: pillars.count)
                 isAnalyzing = false
             }
         }
     }
-    
-    private func shouldCreateEventForPillar(_ pillar: Pillar, daysSince: Double) -> Bool {
-        switch pillar.frequency {
-        case .daily:
-            return daysSince <= -1 // More than 1 day ago
-        case .weekly(let count):
-            let expectedInterval = 7.0 / Double(count)
-            return daysSince <= -expectedInterval
-        case .monthly(let count):
-            let expectedInterval = 30.0 / Double(count)
-            return daysSince <= -expectedInterval
-        case .asNeeded:
-            return daysSince <= -7 // Weekly check for as-needed items
+
+    private func generateAnalysisText(needsDefinition: Int, needsQuiet: Int, totalPillars: Int) -> String {
+        if totalPillars == 0 {
+            return "Create your first pillar to teach the planner what to defend."
         }
-    }
-    
-    private func findBestTimeSlot(for pillar: Pillar) -> (startTime: Date, duration: TimeInterval)? {
-        let calendar = Calendar.current
-        let today = Date()
-        
-        // Check preferred time windows
-        for window in pillar.preferredTimeWindows {
-            if let windowStart = calendar.date(bySettingHour: window.startHour, minute: window.startMinute, second: 0, of: today) {
-                // Check if this slot is available
-                if isTimeSlotAvailable(start: windowStart, duration: pillar.minDuration) {
-                    return (startTime: windowStart, duration: pillar.minDuration)
-                }
-            }
-        }
-        
-        // Fallback: find any available slot
-        return findNextAvailableSlot(duration: pillar.minDuration)
-    }
-    
-    private func isTimeSlotAvailable(start: Date, duration: TimeInterval) -> Bool {
-        let end = start.addingTimeInterval(duration)
-        let allBlocks = dataManager.appState.currentDay.blocks
-        
-        return !allBlocks.contains { block in
-            let blockInterval = DateInterval(start: block.startTime, end: block.endTime)
-            let checkInterval = DateInterval(start: start, end: end)
-            return blockInterval.intersects(checkInterval)
-        }
-    }
-    
-    private func findNextAvailableSlot(duration: TimeInterval) -> (startTime: Date, duration: TimeInterval)? {
-        let calendar = Calendar.current
-        let now = Date()
-        let roundedNow = calendar.date(byAdding: .minute, value: 15 - calendar.component(.minute, from: now) % 15, to: now) ?? now
-        
-        var searchTime = roundedNow
-        let endOfDay = calendar.date(bySettingHour: 22, minute: 0, second: 0, of: now) ?? now
-        
-        while searchTime < endOfDay {
-            if isTimeSlotAvailable(start: searchTime, duration: duration) {
-                return (startTime: searchTime, duration: duration)
-            }
-            searchTime = calendar.date(byAdding: .minute, value: 30, to: searchTime) ?? searchTime
-        }
-        
-        return nil
-    }
-    
-    private func generateAnalysisText(missingCount: Int, totalPillars: Int) -> String {
-        if missingCount == 0 {
-            return "🎉 All your pillars are up to date! Your consistency is paying off."
+
+        var components: [String] = []
+        if needsDefinition == 0 && needsQuiet == 0 {
+            components.append("🎉 Every pillar has guidance, habits, and quiet hours defined.")
         } else {
-            return "📊 Found \(missingCount) of \(totalPillars) pillars that need attention based on their frequency settings."
+            if needsDefinition > 0 {
+                components.append("✍️ \(needsDefinition) pillar\(needsDefinition == 1 ? "" : "s") could use clearer values or habits.")
+            }
+            if needsQuiet > 0 {
+                components.append("🌙 \(needsQuiet) pillar\(needsQuiet == 1 ? "" : "s") are missing quiet hours—add them so ghosts respect recovery time.")
+            }
         }
+
+        return components.joined(separator: "\n")
     }
     
     private func createPillarEvent(for pillar: Pillar) {
@@ -1357,4 +1282,3 @@ struct DraggableSuggestedEventCard: View {
         return NSItemProvider(object: event.title as NSString)
     }
 }
-

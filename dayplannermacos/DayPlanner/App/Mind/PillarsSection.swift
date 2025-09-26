@@ -6,169 +6,53 @@ struct ComprehensivePillarEditorSheet: View {
     let pillar: Pillar
     let onPillarUpdated: (Pillar) -> Void
     @EnvironmentObject private var dataManager: AppDataManager
-    @EnvironmentObject private var aiService: AIService
     @Environment(\.dismiss) private var dismiss
     
     @State private var name: String
     @State private var description: String
-    @State private var type: PillarType
     @State private var frequency: PillarFrequency
-    @State private var minDuration: TimeInterval
-    @State private var maxDuration: TimeInterval
-    @State private var eventConsiderationEnabled: Bool
+    @State private var valuesText: String
+    @State private var habitsText: String
+    @State private var constraintsText: String
+    @State private var quietHoursText: String
     @State private var wisdomText: String
     @State private var emoji: String
-    @State private var color: CodableColor
+    @State private var selectedColor: Color
+    @State private var relatedGoalId: UUID?
     
     init(pillar: Pillar, onPillarUpdated: @escaping (Pillar) -> Void) {
         self.pillar = pillar
         self.onPillarUpdated = onPillarUpdated
         self._name = State(initialValue: pillar.name)
         self._description = State(initialValue: pillar.description)
-        self._type = State(initialValue: pillar.type)
         self._frequency = State(initialValue: pillar.frequency)
-        self._minDuration = State(initialValue: pillar.minDuration)
-        self._maxDuration = State(initialValue: pillar.maxDuration)
-        self._eventConsiderationEnabled = State(initialValue: pillar.eventConsiderationEnabled)
+        self._valuesText = State(initialValue: pillar.values.joined(separator: ", "))
+        self._habitsText = State(initialValue: pillar.habits.joined(separator: ", "))
+        self._constraintsText = State(initialValue: pillar.constraints.joined(separator: ", "))
+        self._quietHoursText = State(initialValue: pillar.quietHours.map { $0.description }.joined(separator: ", "))
         self._wisdomText = State(initialValue: pillar.wisdomText ?? "")
         self._emoji = State(initialValue: pillar.emoji)
-        self._color = State(initialValue: pillar.color)
+        self._selectedColor = State(initialValue: pillar.color.color)
+        self._relatedGoalId = State(initialValue: pillar.relatedGoalId)
     }
     
     var body: some View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 24) {
-                    // Header
-                    VStack(spacing: 8) {
-                        Text("Edit Pillar")
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                        
-                        Text("Core life principle that guides your AI scheduling")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                    }
-                    
-                    // Name and Emoji
-                    VStack(alignment: .leading, spacing: 12) {
-                        SectionHeader(title: "Identity", subtitle: "Name and visual representation", systemImage: "person.circle", gradient: LinearGradient(colors: [.blue, .purple], startPoint: .leading, endPoint: .trailing))
-                        
-                        HStack(spacing: 12) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Emoji")
-                                    .font(.caption)
-                                    .fontWeight(.medium)
-                                
-                                EmojiPickerButton(selectedEmoji: $emoji)
-                            }
-                            
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Name")
-                                    .font(.caption)
-                                    .fontWeight(.medium)
-                                
-                                TextField("e.g., Exercise, Deep Work", text: $name)
-                                    .textFieldStyle(.roundedBorder)
-                            }
-                        }
-                        
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Description")
-                                .font(.caption)
-                                .fontWeight(.medium)
-                            
-                            TextField("What this pillar represents in your life", text: $description)
-                                .textFieldStyle(.roundedBorder)
-                        }
-                    }
-                    .padding(16)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-                    
-                    // Type and Frequency
-                    VStack(alignment: .leading, spacing: 12) {
-                            SectionHeader(title: "Behavior", subtitle: "How this pillar works", systemImage: "gearshape", gradient: LinearGradient(colors: [.green, .blue], startPoint: .leading, endPoint: .trailing))
-                        
-                        Picker("Type", selection: $type) {
-                            ForEach(PillarType.allCases, id: \.self) { pillarType in
-                                Text(pillarType.rawValue).tag(pillarType)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        
-                        Text(type.description)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        
-                        if type == .actionable {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Frequency")
-                                    .font(.caption)
-                                    .fontWeight(.medium)
-                                
-                                Picker("Frequency", selection: $frequency) {
-                                    ForEach(PillarFrequency.allCases, id: \.self) { freq in
-                                        Text(freq.displayName).tag(freq)
-                                    }
-                                }
-                                .pickerStyle(.menu)
-                                
-                                HStack(spacing: 12) {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Min Duration")
-                                            .font(.caption)
-                                            .fontWeight(.medium)
-                                        
-                                        Stepper("\(Int(minDuration/60))m", value: Binding(
-                                            get: { Int(minDuration/60) },
-                                            set: { minDuration = TimeInterval($0 * 60) }
-                                        ), in: 5...240, step: 5)
-                                        .font(.caption)
-                                    }
-                                    
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Max Duration")
-                                            .font(.caption)
-                                            .fontWeight(.medium)
-                                        
-                                        Stepper("\(Int(maxDuration/60))m", value: Binding(
-                                            get: { Int(maxDuration/60) },
-                                            set: { maxDuration = TimeInterval($0 * 60) }
-                                        ), in: 15...480, step: 15)
-                                        .font(.caption)
-                                    }
-                                }
-                            }
-                            
-                        }
-                        
-                        if type == .principle {
-                            Toggle("Consider for AI guidance", isOn: $eventConsiderationEnabled)
-                                .font(.caption)
-                        }
-                    }
-                    .padding(16)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-                    
-                    // Wisdom Text (for principles)
-                    if type == .principle {
-                        VStack(alignment: .leading, spacing: 12) {
-                            SectionHeader(title: "Wisdom", subtitle: "Core principle for AI guidance", systemImage: "lightbulb", gradient: LinearGradient(colors: [.yellow, .orange], startPoint: .leading, endPoint: .trailing))
-                            
-                            TextField("The deeper meaning or principle behind this pillar", text: $wisdomText, axis: .vertical)
-                                .textFieldStyle(.roundedBorder)
-                                .lineLimit(2...4)
-                        }
-                        .padding(16)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-                    }
+                    identitySection
+                    rhythmSection
+                    valuesSection
+                    habitsSection
+                    constraintsSection
+                    quietHoursSection
+                    wisdomSection
+                    linkingSection
+                    appearanceSection
                 }
                 .padding(20)
             }
-            // .navigationBarHidden(true) // Not available on macOS
         }
-        // .navigationViewStyle(.stack) // Not available on macOS
         .frame(width: 600, height: 700)
         .overlay(alignment: .topTrailing) {
             Button("Done") {
@@ -186,28 +70,235 @@ struct ComprehensivePillarEditorSheet: View {
             .padding()
         }
     }
-    
+
+    private var identitySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Identity", subtitle: "Give this pillar a memorable anchor", systemImage: "person.circle", gradient: LinearGradient(colors: [.blue, .purple], startPoint: .leading, endPoint: .trailing))
+
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Emoji")
+                        .font(.caption)
+                        .fontWeight(.medium)
+
+                    EmojiPickerButton(selectedEmoji: $emoji)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Name")
+                        .font(.caption)
+                        .fontWeight(.medium)
+
+                    TextField("Deep Work", text: $name)
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Description")
+                    .font(.caption)
+                    .fontWeight(.medium)
+
+                TextField("What this pillar defends in your life", text: $description, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(2...4)
+            }
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var rhythmSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Rhythm", subtitle: "How often this principle should surface", systemImage: "metronome", gradient: LinearGradient(colors: [.green, .blue], startPoint: .leading, endPoint: .trailing))
+
+            Picker("How often", selection: $frequency) {
+                ForEach(PillarFrequency.allCases, id: \.self) { freq in
+                    Text(freq.displayName).tag(freq)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Text("The learner prioritises pillars with higher cadence when creating ghosts.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var valuesSection: some View {
+        PillarListEditor(
+            title: "Values",
+            subtitle: "Comma-separated values this pillar protects (e.g. focus, craft, calm).",
+            placeholder: "focus, craft, calm",
+            text: $valuesText
+        )
+    }
+
+    private var habitsSection: some View {
+        PillarListEditor(
+            title: "Habits",
+            subtitle: "What behaviours should the engine encourage when this pillar is active?",
+            placeholder: "90-minute deep work, midday reset walk",
+            text: $habitsText
+        )
+    }
+
+    private var constraintsSection: some View {
+        PillarListEditor(
+            title: "Constraints",
+            subtitle: "Boundaries to respect when trading against this pillar.",
+            placeholder: "no meetings before 11, defend Fridays for focus",
+            text: $constraintsText
+        )
+    }
+
+    private var quietHoursSection: some View {
+        PillarListEditor(
+            title: "Quiet Hours",
+            subtitle: "Format each window as HH:MM-HH:MM. Separate multiple ranges with commas or line breaks.",
+            placeholder: "06:00-08:30, 21:00-23:00",
+            text: $quietHoursText
+        )
+    }
+
+    private var wisdomSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Wisdom", subtitle: "Short principle statement sent to the AI", systemImage: "lightbulb", gradient: LinearGradient(colors: [.yellow, .orange], startPoint: .leading, endPoint: .trailing))
+
+            TextField("Reminder phrase", text: $wisdomText, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(2...4)
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var linkingSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Connections", subtitle: "Tie this pillar to a goal (optional)", systemImage: "target", gradient: LinearGradient(colors: [.indigo, .purple], startPoint: .leading, endPoint: .trailing))
+
+            Picker("Supports goal", selection: $relatedGoalId) {
+                Text("None").tag(nil as UUID?)
+                ForEach(dataManager.appState.goals) { goal in
+                    Text(goal.title).tag(goal.id as UUID?)
+                }
+            }
+            .pickerStyle(.menu)
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var appearanceSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Appearance", subtitle: "Color cues in calendar & Mind view", systemImage: "paintpalette", gradient: LinearGradient(colors: [.pink, .purple], startPoint: .leading, endPoint: .trailing))
+
+            ColorPicker("Accent", selection: $selectedColor, supportsOpacity: false)
+            Text("Used for chips, badges, and goal graph references.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
     private func savePillar() {
         let updatedPillar = Pillar(
             id: pillar.id,
-            name: name,
-            description: description,
-            type: type,
+            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+            description: description.trimmingCharacters(in: .whitespacesAndNewlines),
             frequency: frequency,
-            minDuration: minDuration,
-            maxDuration: maxDuration,
-            preferredTimeWindows: pillar.preferredTimeWindows,
-            overlapRules: pillar.overlapRules,
-            quietHours: pillar.quietHours,
-            eventConsiderationEnabled: eventConsiderationEnabled,
-            wisdomText: wisdomText.isEmpty ? nil : wisdomText,
-            color: color,
-            emoji: emoji.isEmpty ? "🏛️" : emoji,
-            relatedGoalId: pillar.relatedGoalId
+            quietHours: sanitizedQuietHours(from: quietHoursText),
+            wisdomText: wisdomText.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+            values: sanitizedPillarStrings(from: valuesText),
+            habits: sanitizedPillarStrings(from: habitsText),
+            constraints: sanitizedPillarStrings(from: constraintsText),
+            color: CodableColor(selectedColor),
+            emoji: emoji.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "🏛️",
+            relatedGoalId: relatedGoalId,
+            createdAt: pillar.createdAt
         )
-        
+
         onPillarUpdated(updatedPillar)
     }
+}
+
+private struct PillarListEditor: View {
+    let title: String
+    let subtitle: String
+    let placeholder: String
+    @Binding var text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: title, subtitle: subtitle, systemImage: "list.bullet", gradient: LinearGradient(colors: [.teal, .blue], startPoint: .leading, endPoint: .trailing))
+
+            TextField(placeholder, text: $text, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(1...3)
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+private func sanitizedPillarStrings(from text: String) -> [String] {
+    let separators = CharacterSet(charactersIn: ",\n")
+    var seen = Set<String>()
+    return text
+        .components(separatedBy: separators)
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+        .filter { item in
+            let lowered = item.lowercased()
+            if seen.contains(lowered) {
+                return false
+            } else {
+                seen.insert(lowered)
+                return true
+            }
+        }
+}
+
+private func sanitizedQuietHours(from text: String) -> [TimeWindow] {
+    let separators = CharacterSet(charactersIn: ",\n")
+    var windows: [TimeWindow] = []
+    var seen = Set<String>()
+
+    for candidate in text.components(separatedBy: separators) {
+        let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let window = parseTimeWindowString(trimmed) else { continue }
+        let key = "\(window.startHour):\(window.startMinute)-\(window.endHour):\(window.endMinute)"
+        if seen.insert(key).inserted {
+            windows.append(window)
+        }
+    }
+
+    return windows
+}
+
+private func parseTimeWindowString(_ text: String) -> TimeWindow? {
+    let parts = text.split(separator: "-")
+    guard parts.count == 2,
+          let start = parseClockString(String(parts[0])),
+          let end = parseClockString(String(parts[1])) else { return nil }
+    let startMinutes = start.hour * 60 + start.minute
+    let endMinutes = end.hour * 60 + end.minute
+    guard endMinutes > startMinutes else { return nil }
+    return TimeWindow(startHour: start.hour, startMinute: start.minute, endHour: end.hour, endMinute: end.minute)
+}
+
+private func parseClockString(_ text: String) -> (hour: Int, minute: Int)? {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    let components = trimmed.split(separator: ":")
+    guard components.count == 2,
+          let hour = Int(components[0]),
+          let minute = Int(components[1]),
+          (0..<24).contains(hour),
+          (0..<60).contains(minute) else { return nil }
+    return (hour, minute)
 }
 
 struct ComprehensivePillarCreatorSheet: View {
@@ -218,11 +309,12 @@ struct ComprehensivePillarCreatorSheet: View {
     
     @State private var pillarName = ""
     @State private var pillarDescription = ""
-    @State private var wisdomText = ""
     @State private var selectedFrequency: PillarFrequency = .daily
-    @State private var minDuration = 30
-    @State private var maxDuration = 120
-    @State private var isPrincipleOnly = false
+    @State private var valuesText = ""
+    @State private var habitsText = ""
+    @State private var constraintsText = ""
+    @State private var quietHoursText = ""
+    @State private var wisdomText = ""
     @State private var selectedColor: Color = .blue
     @State private var selectedEmoji = "🏛️"
     @State private var relatedGoalId: UUID?
@@ -232,117 +324,17 @@ struct ComprehensivePillarCreatorSheet: View {
     var body: some View {
         NavigationView {
             ScrollView {
-                VStack(spacing: 20) {
-                    // Basic info
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Basic Information")
-                            .font(.headline)
-                            .fontWeight(.semibold)
-                        
-                        HStack(spacing: 12) {
-                            TextField("Pillar name", text: $pillarName)
-                                    .textFieldStyle(.roundedBorder)
-                                    .onChange(of: pillarName) { _, _ in
-                                        generateAISuggestions()
-                                }
-                            
-                            // Emoji picker
-                            EmojiPickerButton(selectedEmoji: $selectedEmoji)
-                        }
-                        
-                        TextField("Description", text: $pillarDescription, axis: .vertical)
-                            .textFieldStyle(.roundedBorder)
-                            .lineLimit(2...4)
-                        
-                        // Principle vs actionable toggle
-                        VStack(alignment: .leading, spacing: 8) {
-                            Toggle("Principle only (guides AI, doesn't create events)", isOn: $isPrincipleOnly)
-                                        .font(.subheadline)
-                            
-                            if isPrincipleOnly {
-                                TextField("Core wisdom/principle", text: $wisdomText, axis: .vertical)
-                                    .textFieldStyle(.roundedBorder)
-                                    .lineLimit(2...4)
-                                    .help("This wisdom guides all AI decisions")
-                            }
-                        }
-                    }
-                    
-                    // Scheduling settings (only for actionable pillars)
-                    if !isPrincipleOnly {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Scheduling")
-                            .font(.headline)
-                            .fontWeight(.semibold)
-                                
-                                Picker("Frequency", selection: $selectedFrequency) {
-                                    Text("Daily").tag(PillarFrequency.daily)
-                                    Text("3x per week").tag(PillarFrequency.weekly(3))
-                                    Text("Weekly").tag(PillarFrequency.weekly(1))
-                                    Text("As needed").tag(PillarFrequency.asNeeded)
-                                }
-                                .pickerStyle(.segmented)
-                                
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                    Text("Duration: \(minDuration)-\(maxDuration) min")
-                                        .font(.subheadline)
-                                        
-                                    HStack {
-                                        Slider(value: Binding(
-                                            get: { Double(minDuration) },
-                                            set: { minDuration = Int($0) }
-                                        ), in: 15...120, step: 15)
-                                        Text("\(minDuration)m")
-                                            .frame(width: 35)
-                                    }
-                                    
-                                    HStack {
-                                        Slider(value: Binding(
-                                            get: { Double(maxDuration) },
-                                            set: { maxDuration = Int($0) }
-                                        ), in: 30...240, step: 15)
-                                        Text("\(maxDuration)m")
-                                            .frame(width: 35)
-                                    }
-                                }
-                            }
-                            
-                        }
-                    }
-                    
-                    // Goal relation
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Goal Connection")
-                                .font(.headline)
-                                .fontWeight(.semibold)
-                            
-                        Picker("Related goal", selection: $relatedGoalId) {
-                            Text("No goal connection").tag(nil as UUID?)
-                            ForEach(dataManager.appState.goals) { goal in
-                                Text(goal.title).tag(goal.id as UUID?)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                    }
-                    
-                    // AI suggestions
-                    if !aiSuggestions.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("AI Suggestions")
-                                .font(.headline)
-                                .fontWeight(.medium)
-                            
-                            Text(aiSuggestions)
-                                .font(.body)
-                                .foregroundStyle(.secondary)
-                                .padding()
-                                .background(.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-                        }
-                    }
-                    
-                    // Color picker
-                    ColorPicker("Pillar color", selection: $selectedColor)
+                VStack(spacing: 24) {
+                    identitySection
+                    rhythmSection
+                    valuesSection
+                    habitsSection
+                    constraintsSection
+                    quietHoursSection
+                    wisdomSection
+                    linkingSection
+                    appearanceSection
+                    aiAssistSection
                 }
                 .padding(24)
             }
@@ -353,78 +345,256 @@ struct ComprehensivePillarCreatorSheet: View {
                 }
                 
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Create & Auto-populate") {
-                        createPillarWithAI()
+                    Button("Create") {
+                        createPillar()
                     }
-                .disabled(pillarName.isEmpty)
-            }
+                    .disabled(pillarName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
             }
         }
-        .frame(width: 600, height: 700)
+        .frame(width: 620, height: 720)
     }
-    
+
+    private var identitySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Identity", subtitle: "Give the pillar a clear signal", systemImage: "person.crop.square", gradient: LinearGradient(colors: [.blue, .purple], startPoint: .leading, endPoint: .trailing))
+            
+            HStack(spacing: 12) {
+                TextField("Pillar name", text: $pillarName)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+                
+                EmojiPickerButton(selectedEmoji: $selectedEmoji)
+            }
+            
+            TextField("Describe why this matters", text: $pillarDescription, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(2...4)
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var rhythmSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Rhythm", subtitle: "How often should this principle surface?", systemImage: "metronome", gradient: LinearGradient(colors: [.green, .blue], startPoint: .leading, endPoint: .trailing))
+
+            Picker("Cadence", selection: $selectedFrequency) {
+                ForEach(PillarFrequency.allCases, id: \.self) { freq in
+                    Text(freq.displayName).tag(freq)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Text("This hints to the learner how frequently to bias ghosts.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var valuesSection: some View {
+        PillarListEditor(
+            title: "Values",
+            subtitle: "Comma-separated values this pillar defends (e.g. focus, craft, calm)",
+            placeholder: "focus, craft, calm",
+            text: $valuesText
+        )
+    }
+
+    private var habitsSection: some View {
+        PillarListEditor(
+            title: "Habits",
+            subtitle: "Behaviours the AI should encourage when this pillar is active.",
+            placeholder: "90-minute deep work, midday reset walk",
+            text: $habitsText
+        )
+    }
+
+    private var constraintsSection: some View {
+        PillarListEditor(
+            title: "Constraints",
+            subtitle: "Hard boundaries that shape scheduling decisions.",
+            placeholder: "no meetings before 11, defend Fridays for focus",
+            text: $constraintsText
+        )
+    }
+
+    private var quietHoursSection: some View {
+        PillarListEditor(
+            title: "Quiet Hours",
+            subtitle: "Use HH:MM-HH:MM (comma or newline separated)",
+            placeholder: "06:00-08:30, 21:00-23:00",
+            text: $quietHoursText
+        )
+    }
+
+    private var wisdomSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Wisdom", subtitle: "Short principle for the AI to remember", systemImage: "lightbulb", gradient: LinearGradient(colors: [.yellow, .orange], startPoint: .leading, endPoint: .trailing))
+            TextField("Guiding phrase", text: $wisdomText, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(2...4)
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var linkingSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Connections", subtitle: "Optionally link to a goal", systemImage: "target", gradient: LinearGradient(colors: [.indigo, .purple], startPoint: .leading, endPoint: .trailing))
+            Picker("Supports goal", selection: $relatedGoalId) {
+                Text("None").tag(nil as UUID?)
+                ForEach(dataManager.appState.goals) { goal in
+                    Text(goal.title).tag(goal.id as UUID?)
+                }
+            }
+            .pickerStyle(.menu)
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var appearanceSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Appearance", subtitle: "Color accents for this pillar", systemImage: "paintpalette", gradient: LinearGradient(colors: [.pink, .purple], startPoint: .leading, endPoint: .trailing))
+            ColorPicker("Accent", selection: $selectedColor, supportsOpacity: false)
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var aiAssistSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "AI Assist", subtitle: "Let the planner suggest details", systemImage: "sparkles", gradient: LinearGradient(colors: [.cyan, .blue], startPoint: .leading, endPoint: .trailing))
+
+            HStack(spacing: 12) {
+                Button {
+                    generateAISuggestions()
+                } label: {
+                    Label("Generate Suggestions", systemImage: "wand.and.stars")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isGeneratingAI || pillarName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                if isGeneratingAI {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+
+            Button {
+                createPillarWithAI()
+            } label: {
+                Label("Create & Enhance with AI", systemImage: "sparkle")
+            }
+            .buttonStyle(.bordered)
+            .disabled(pillarName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+            if !aiSuggestions.isEmpty {
+                Text(aiSuggestions)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(12)
+                    .background(.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+            }
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func createPillar() {
+        let pillar = buildPillar()
+        onPillarCreated(pillar)
+        dismiss()
+    }
+
+    private func buildPillar() -> Pillar {
+        Pillar(
+            name: pillarName.trimmingCharacters(in: .whitespacesAndNewlines),
+            description: pillarDescription.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "",
+            frequency: selectedFrequency,
+            quietHours: sanitizedQuietHours(from: quietHoursText),
+            wisdomText: wisdomText.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+            values: sanitizedPillarStrings(from: valuesText),
+            habits: sanitizedPillarStrings(from: habitsText),
+            constraints: sanitizedPillarStrings(from: constraintsText),
+            color: CodableColor(selectedColor),
+            emoji: selectedEmoji.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "🏛️",
+            relatedGoalId: relatedGoalId
+        )
+    }
+
     private func generateAISuggestions() {
-        guard !pillarName.isEmpty else { return }
-        
+        let trimmedName = pillarName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty, !isGeneratingAI else { return }
+
         isGeneratingAI = true
-        
+        aiSuggestions = ""
+
         Task {
             let prompt = """
-            User creating pillar: "\(pillarName)"
-            
-            Suggest optimal:
-            - Description (1 sentence)
-            - Frequency (daily/weekly/etc)
-            - Duration range
-            - Whether this should be principle-only or actionable
-            
-            Brief response.
+            You are helping define a personal planning pillar for a local-first calendar.
+            Return ONLY valid JSON matching this schema:
+            {
+              "description": "string",
+              "wisdom": "string",
+              "values": ["string"],
+              "habits": ["string"],
+              "constraints": ["string"],
+              "quiet_hours": ["HH:MM-HH:MM"],
+              "frequency": "daily|weekly|monthly|as needed"
+            }
+
+            Current inputs:
+            Name: \(trimmedName)
+            Description: \(pillarDescription)
+            Values: \(valuesText)
+            Habits: \(habitsText)
+            Constraints: \(constraintsText)
+            QuietHours: \(quietHoursText)
+
+            Respond with JSON only.
             """
-            
+
             do {
                 let context = dataManager.createEnhancedContext()
                 let response = try await aiService.processMessage(prompt, context: context)
-                
+
                 await MainActor.run {
-                    aiSuggestions = response.text
+                    if let suggestion = decodeSuggestion(from: response.text) {
+                        applySuggestion(suggestion)
+                        aiSuggestions = summary(for: suggestion)
+                    } else {
+                        aiSuggestions = response.text
+                    }
                     isGeneratingAI = false
                 }
             } catch {
                 await MainActor.run {
-                    aiSuggestions = "This looks like a good pillar. Consider if it should create events or just guide decisions."
+                    aiSuggestions = "Assistant unavailable. Try again in a moment."
                     isGeneratingAI = false
                 }
             }
         }
     }
-    
+
     private func createPillarWithAI() {
         Task {
-            // First create basic pillar
-            let newPillar = Pillar(
-            name: pillarName,
-                description: pillarDescription.isEmpty ? "AI will enhance this" : pillarDescription,
-                type: isPrincipleOnly ? .principle : .actionable,
-            frequency: selectedFrequency,
-                minDuration: isPrincipleOnly ? 0 : TimeInterval(minDuration * 60),
-                maxDuration: isPrincipleOnly ? 0 : TimeInterval(maxDuration * 60),
-                eventConsiderationEnabled: true,
-                wisdomText: isPrincipleOnly ? wisdomText : nil,
-                color: CodableColor(selectedColor),
-                emoji: selectedEmoji,
-                relatedGoalId: relatedGoalId
-            )
-        
-            // Then enhance with AI
+            let newPillar = buildPillar()
+            
             do {
                 let enhancedPillar = try await enhancePillarWithAI(newPillar)
                 
                 await MainActor.run {
                     onPillarCreated(enhancedPillar)
+                    dismiss()
                 }
             } catch {
                 await MainActor.run {
-        onPillarCreated(newPillar)
+                    onPillarCreated(newPillar)
+                    dismiss()
                 }
             }
         }
@@ -433,24 +603,145 @@ struct ComprehensivePillarCreatorSheet: View {
     private func enhancePillarWithAI(_ pillar: Pillar) async throws -> Pillar {
         let context = dataManager.createEnhancedContext()
         let prompt = """
-        Enhance this pillar based on user patterns:
+        Improve the following planning pillar using user context. Return ONLY valid JSON with the same schema as earlier.
+
+        Pillar:
         Name: \(pillar.name)
-        Type: \(pillar.type.rawValue)
-        
+        Description: \(pillar.description)
+        Values: \(pillar.values.joined(separator: ", "))
+        Habits: \(pillar.habits.joined(separator: ", "))
+        Constraints: \(pillar.constraints.joined(separator: ", "))
+        QuietHours: \(pillar.quietHours.map { $0.description }.joined(separator: ", "))
+        Wisdom: \(pillar.wisdomText ?? "")
+        Frequency: \(pillar.frequency.displayName)
+
         User context: \(context.summary)
-        
-        Provide enhanced description and if principle, core wisdom text.
         """
         
         let response = try await aiService.processMessage(prompt, context: context)
-        
-        var enhanced = pillar
-        enhanced.description = response.text
-        if pillar.isPrinciple && enhanced.wisdomText?.isEmpty != false {
-            enhanced.wisdomText = "Live by: \(response.text)"
+        if let suggestion = decodeSuggestion(from: response.text) {
+            var enhanced = pillar
+            if let description = suggestion.description?.nilIfEmpty {
+                enhanced.description = description
+            }
+            if let wisdom = suggestion.wisdom?.nilIfEmpty {
+                enhanced.wisdomText = wisdom
+            }
+            if let values = suggestion.values, !values.isEmpty {
+                enhanced.values = sanitizedPillarStrings(from: values.joined(separator: ", "))
+            }
+            if let habits = suggestion.habits, !habits.isEmpty {
+                enhanced.habits = sanitizedPillarStrings(from: habits.joined(separator: ", "))
+            }
+            if let constraints = suggestion.constraints, !constraints.isEmpty {
+                enhanced.constraints = sanitizedPillarStrings(from: constraints.joined(separator: ", "))
+            }
+            if let quiet = suggestion.quiet_hours, !quiet.isEmpty {
+                enhanced.quietHours = sanitizedQuietHours(from: quiet.joined(separator: ", "))
+            }
+            if let freq = suggestion.frequency {
+                enhanced.frequency = resolveFrequency(freq)
+            }
+            return enhanced
         }
+
+        var fallback = pillar
+        if pillar.description.isEmpty {
+            fallback.description = response.text
+        }
+        if fallback.wisdomText?.isEmpty != false {
+            fallback.wisdomText = response.text
+        }
+        return fallback
+    }
+
+    private func applySuggestion(_ suggestion: PillarSuggestion) {
+        if let description = suggestion.description?.nilIfEmpty {
+            pillarDescription = description
+        }
+        if let wisdom = suggestion.wisdom?.nilIfEmpty {
+            wisdomText = wisdom
+        }
+        if let values = suggestion.values, !values.isEmpty {
+            valuesText = values.joined(separator: ", ")
+        }
+        if let habits = suggestion.habits, !habits.isEmpty {
+            habitsText = habits.joined(separator: ", ")
+        }
+        if let constraints = suggestion.constraints, !constraints.isEmpty {
+            constraintsText = constraints.joined(separator: ", ")
+        }
+        if let quiet = suggestion.quiet_hours, !quiet.isEmpty {
+            quietHoursText = quiet.joined(separator: ", ")
+        }
+        if let frequency = suggestion.frequency {
+            selectedFrequency = resolveFrequency(frequency)
+        }
+    }
+
+    private func decodeSuggestion(from responseText: String) -> PillarSuggestion? {
+        let cleaned = responseText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let start = cleaned.firstIndex(of: "{"), let end = cleaned.lastIndex(of: "}") else { return nil }
+        let jsonSlice = cleaned[start...end]
+        guard let data = jsonSlice.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(PillarSuggestion.self, from: data)
+    }
+
+    private func summary(for suggestion: PillarSuggestion) -> String {
+        var lines: [String] = []
+        if let description = suggestion.description?.nilIfEmpty {
+            lines.append("Description → \(description)")
+        }
+        if let values = suggestion.values, !values.isEmpty {
+            lines.append("Values → \(values.joined(separator: ", "))")
+        }
+        if let habits = suggestion.habits, !habits.isEmpty {
+            lines.append("Habits → \(habits.joined(separator: ", "))")
+        }
+        if let constraints = suggestion.constraints, !constraints.isEmpty {
+            lines.append("Constraints → \(constraints.joined(separator: ", "))")
+        }
+        if let quiet = suggestion.quiet_hours, !quiet.isEmpty {
+            lines.append("Quiet hours → \(quiet.joined(separator: ", "))")
+        }
+        if let freq = suggestion.frequency?.nilIfEmpty {
+            lines.append("Frequency → \(freq)")
+        }
+        if let wisdom = suggestion.wisdom?.nilIfEmpty {
+            lines.append("Wisdom → \(wisdom)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func resolveFrequency(_ text: String) -> PillarFrequency {
+        let lower = text.lowercased()
+        if lower.contains("need") { return .asNeeded }
+        if lower.contains("daily") { return .daily }
+        if lower.contains("month") {
+            let count = Int(lower.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()) ?? 1
+            return .monthly(max(1, count))
+        }
+        if lower.contains("week") {
+            let count = Int(lower.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()) ?? 1
+            return .weekly(max(1, count))
+        }
+        return .weekly(1)
+    }
+
+    private struct PillarSuggestion: Decodable {
+        let description: String?
+        let wisdom: String?
+        let values: [String]?
+        let habits: [String]?
+        let constraints: [String]?
+        let quiet_hours: [String]?
+        let frequency: String?
         
-        return enhanced
+        private enum CodingKeys: String, CodingKey {
+            case description, wisdom, values, habits, constraints
+            case quiet_hours = "quiet_hours"
+            case frequency
+        }
     }
 }
 
@@ -583,6 +874,26 @@ struct EnhancedPillarCard: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .fontWeight(.medium)
+
+                    if let wisdom = pillar.wisdomText?.nilIfEmpty {
+                        Text(wisdom)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+
+                    if !pillar.values.isEmpty {
+                        Text(pillar.values.prefix(2).joined(separator: ", "))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    if !pillar.habits.isEmpty {
+                        Text(pillar.habits.prefix(1).joined(separator: ", "))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
             }
         }
@@ -839,4 +1150,3 @@ struct EmojiPickerView: View {
         .frame(width: 360)
     }
 }
-

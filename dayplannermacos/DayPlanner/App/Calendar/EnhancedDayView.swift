@@ -269,8 +269,9 @@ private extension EnhancedDayView {
     func generateGhostSuggestions(for date: Date, reason: MicroUpdateReason?, forceLLM: Bool) async -> [Suggestion] {
         let gaps = computeGaps(for: date)
         let availableTime = gaps.reduce(0) { $0 + $1.duration }
-        let guidance = dataManager.appState.pillars.filter { $0.isPrinciple }.map { $0.aiGuidanceText }
-        let actionable = dataManager.appState.pillars.filter { $0.isActionable }
+        let guidance = dataManager.appState.pillars
+            .map { $0.aiGuidanceText }
+            .filter { !$0.isEmpty }
         let context = DayContext(
             date: date,
             existingBlocks: dataManager.appState.currentDay.blocks,
@@ -279,8 +280,7 @@ private extension EnhancedDayView {
             availableTime: availableTime,
             mood: dataManager.appState.currentDay.mood,
             weatherContext: dataManager.weatherService.getWeatherContext(),
-            pillarGuidance: guidance,
-            actionablePillars: actionable
+            pillarGuidance: guidance
         )
         let base = await dataManager.produceSuggestions(context: context, reason: reason, forceLLM: forceLLM, aiService: aiService)
         return dataManager.resolveMetadata(for: base)
@@ -288,59 +288,90 @@ private extension EnhancedDayView {
     
     func assignTimes(to suggestions: inout [Suggestion], for date: Date) {
         var gaps = computeGaps(for: date)
-        guard !gaps.isEmpty else { return }
+        guard !gaps.isEmpty else {
+            suggestions.removeAll()
+            return
+        }
+
         let isToday = Calendar.current.isDate(date, inSameDayAs: Date())
+        let now = Date()
         let minimumDuration: TimeInterval = 600
+        var placed: [Suggestion] = []
 
-        for index in suggestions.indices {
-            let desiredDuration = max(minimumDuration, suggestions[index].duration)
-            let primaryMatch = gaps.enumerated().first { _, gap in gap.duration >= desiredDuration }
-            let fallbackMatch = gaps.enumerated().first { _, gap in gap.duration >= minimumDuration }
-            guard let gapIndex = (primaryMatch ?? fallbackMatch)?.offset else {
-                break
-            }
-
-            var gap = gaps[gapIndex]
-            guard gap.duration >= minimumDuration else {
-                gaps.remove(at: gapIndex)
+        for var suggestion in suggestions {
+            guard let placement = placeSuggestion(
+                suggestion,
+                into: &gaps,
+                isToday: isToday,
+                now: now,
+                minimumDuration: minimumDuration
+            ) else {
                 continue
             }
 
-            var suggestion = suggestions[index]
-            let anchorStart = isToday ? max(gap.start, Date()) : gap.start
-            var startTime = snapUpToNearestFiveMinutes(anchorStart)
-            if startTime < gap.start {
-                startTime = gap.start
+            suggestion.suggestedTime = placement.start
+            suggestion.duration = placement.duration
+            placed.append(suggestion)
+        }
+
+        suggestions = placed.sorted { $0.suggestedTime < $1.suggestedTime }
+    }
+
+    func placeSuggestion(
+        _ suggestion: Suggestion,
+        into gaps: inout [TimeGap],
+        isToday: Bool,
+        now: Date,
+        minimumDuration: TimeInterval
+    ) -> (start: Date, duration: TimeInterval)? {
+        var index = 0
+        while index < gaps.count {
+            var gap = gaps[index]
+            let adjustedStart = isToday ? max(gap.start, now) : gap.start
+            let gapDuration = gap.end.timeIntervalSince(adjustedStart)
+
+            if gapDuration < minimumDuration {
+                gaps.remove(at: index)
+                continue
             }
+
+            var startTime = snapUpToNearestFiveMinutes(adjustedStart)
+            if startTime < adjustedStart {
+                startTime = adjustedStart
+            }
+
             if startTime >= gap.end {
-                gaps.remove(at: gapIndex)
+                gaps.remove(at: index)
                 continue
             }
 
             let available = gap.end.timeIntervalSince(startTime)
-            guard available >= minimumDuration else {
-                gaps.remove(at: gapIndex)
+            if available < minimumDuration {
+                gaps.remove(at: index)
                 continue
             }
 
-            let buffer: TimeInterval = available >= minimumDuration + 120 ? 120 : 0
-            let maxDuration = min(gap.duration, max(gap.duration - buffer, minimumDuration))
-            let adjustedDuration = min(maxDuration, suggestion.duration)
-            let finalDuration = max(min(adjustedDuration, available - buffer), minimumDuration)
+            let desiredDuration = max(minimumDuration, suggestion.duration)
+            let buffer: TimeInterval = available >= desiredDuration + 120 ? 120 : 0
+            let finalDuration = min(desiredDuration, available - buffer)
 
-            suggestion.duration = min(finalDuration, available)
-            suggestion.suggestedTime = startTime
-            suggestions[index] = suggestion
+            if finalDuration < minimumDuration {
+                gaps.remove(at: index)
+                continue
+            }
 
-            let consumptionEnd = startTime.addingTimeInterval(suggestion.duration + buffer)
+            let consumptionEnd = startTime.addingTimeInterval(finalDuration + buffer)
             if consumptionEnd < gap.end - minimumDuration {
                 gap.start = consumptionEnd
-                gaps[gapIndex] = gap
+                gaps[index] = gap
             } else {
-                gaps.remove(at: gapIndex)
+                gaps.remove(at: index)
             }
-            if gaps.isEmpty { break }
+
+            return (startTime, finalDuration)
         }
+
+        return nil
     }
     
     func computeGaps(for date: Date) -> [TimeGap] {

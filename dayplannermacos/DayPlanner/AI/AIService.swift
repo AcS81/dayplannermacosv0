@@ -155,7 +155,12 @@ class AIService: ObservableObject {
     @Published var isProcessing = false
     @Published var lastResponseTime: TimeInterval = 0
     
-    private let baseURL = "http://localhost:1234"
+    private var provider: AIProvider = .local
+    private var baseURL: String = "http://localhost:1234"
+    private var customEndpoint: String = "http://localhost:1234"
+    private var openAIAPIKey: String = ""
+    private var openAIModel: String = "gpt-4o-mini"
+    private var localModel: String = "openai/gpt-oss-20b"
     private let session: URLSession
     
     // Smart confidence thresholds for different actions
@@ -174,8 +179,6 @@ class AIService: ObservableObject {
         
         Task {
             await checkConnection()
-            
-            // Set up periodic connection monitoring
             await startConnectionMonitoring()
         }
     }
@@ -184,6 +187,17 @@ class AIService: ObservableObject {
     
     func setPatternEngine(_ patternEngine: PatternLearningEngine) {
         self.patternEngine = patternEngine
+    }
+    
+    func configure(with preferences: UserPreferences) {
+        provider = preferences.aiProvider
+        customEndpoint = preferences.customApiEndpoint.isEmpty ? "http://localhost:1234" : preferences.customApiEndpoint
+        baseURL = provider == .openAI ? "https://api.openai.com" : customEndpoint
+        openAIAPIKey = preferences.openaiApiKey
+        openAIModel = preferences.openaiModel.isEmpty ? "gpt-4o-mini" : preferences.openaiModel
+        Task {
+            await checkConnection()
+        }
     }
     
     private func startConnectionMonitoring() async {
@@ -200,29 +214,40 @@ class AIService: ObservableObject {
     
     func checkConnection() async {
         do {
-            let url = URL(string: "\(baseURL)/v1/models")!
+            let endpoint: String
+            switch provider {
+            case .local:
+                endpoint = "\(baseURL)/v1/models"
+            case .openAI:
+                guard !openAIAPIKey.isEmpty else {
+                    await MainActor.run { isConnected = false }
+                    print("⚠️ OpenAI API key not configured")
+                    return
+                }
+                endpoint = "https://api.openai.com/v1/models"
+            }
+
+            guard let url = URL(string: endpoint) else { return }
+
             var request = URLRequest(url: url)
-            request.timeoutInterval = 5.0 // Shorter timeout for connection check
+            request.timeoutInterval = 5.0
             request.setValue("application/json", forHTTPHeaderField: "Accept")
-            
+            if provider == .openAI {
+                request.setValue("Bearer \(openAIAPIKey)", forHTTPHeaderField: "Authorization")
+            }
+
             let (_, response) = try await session.data(for: request)
-            
+
             if let httpResponse = response as? HTTPURLResponse,
                httpResponse.statusCode == 200 {
-                await MainActor.run {
-                    isConnected = true
-                }
-                print("✅ AI Service connected to LM Studio at \(baseURL)")
+                await MainActor.run { isConnected = true }
+                print("✅ AI Service connected to \(provider == .openAI ? "OpenAI" : "Endpoint") at \(endpoint)")
             } else {
-                await MainActor.run {
-                    isConnected = false
-                }
+                await MainActor.run { isConnected = false }
                 print("❌ AI Service: HTTP error \((response as? HTTPURLResponse)?.statusCode ?? -1)")
             }
         } catch {
-            await MainActor.run {
-                isConnected = false
-            }
+            await MainActor.run { isConnected = false }
             print("❌ AI Service connection failed: \(error.localizedDescription)")
         }
     }
@@ -371,8 +396,7 @@ class AIService: ObservableObject {
         - Available time: \(Int(context.availableTime/3600)) hours
         - Current energy: \(context.currentEnergy.description)
         - Mood: \(context.mood.description)
-        - Active pillars: \(context.actionablePillars.map(\.name).joined(separator: ", "))
-        - Guiding principles: \(context.pillarGuidance.joined(separator: "; "))
+        - Pillar guidance: \(context.pillarGuidance.joined(separator: "; "))
         
         User Pattern Intelligence:
         \(patternInsights)
@@ -401,7 +425,7 @@ class AIService: ObservableObject {
                 "time": "extracted time or null",
                 "duration": "extracted duration or estimated",
                 "importance": "high/medium/low",
-                "type": "actionable/principle for pillars"
+                "pillar_focus": "values|habits|constraints"
             },
             "urgency": "high",
             "contextAlignment": 0.9,
@@ -411,7 +435,7 @@ class AIService: ObservableObject {
         UPDATED Action thresholds for better UX:
         - create_event: Scheduling specific activity (confidence ≥ 0.7)
         - create_goal: Long-term objective mentioned (confidence ≥ 0.8)
-        - create_pillar: Recurring principle/habit (confidence ≥ 0.85)
+        - create_pillar: New principle or guiding value (confidence ≥ 0.85)
         - create_chain: Multiple linked activities (confidence ≥ 0.75)
         - suggest_activities: Asking for ideas (confidence ≥ 0.6)
         - general_chat: Everything else (confidence < 0.6)
@@ -427,7 +451,7 @@ class AIService: ObservableObject {
         guard let patternEngine = patternEngine else {
             return "Pattern learning system initializing. Building intelligence about user preferences."
         }
-        
+
         var insights: [String] = []
         
         // Add intelligence quality assessment
@@ -475,7 +499,7 @@ class AIService: ObservableObject {
         
         return insights.isEmpty ? "Building pattern intelligence. First few interactions help establish preferences." : insights.joined(separator: "\n")
     }
-    
+
     private func extractUserPreferences() -> String {
         guard let patternEngine = patternEngine else { return "" }
         
@@ -506,7 +530,86 @@ class AIService: ObservableObject {
         
         return preferences.joined(separator: "; ")
     }
-    
+
+    // MARK: - Mind Editor
+
+    func processMindCommands(message: String, context: MindEditorContext) async throws -> MindCommandResponse {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+        let contextData = try encoder.encode(context)
+        guard let contextJSON = String(data: contextData, encoding: .utf8) else {
+            throw AIError.invalidResponse
+        }
+
+        let escapedMessage = message.replacingOccurrences(of: "\"", with: "\\\"")
+
+        let prompt = """
+        You are the Mind editor for a personal planning app. Adjust the user's long-term goals and pillars using precise commands.
+
+        CURRENT_STATE_JSON:
+        \(contextJSON)
+
+        USER_REQUEST:
+        "\(escapedMessage)"
+
+        Respond with ONLY valid JSON using snake_case keys and this shape:
+        {
+          "summary": "short status",
+          "commands": [
+            {
+              "type": "create_goal|update_goal|add_node|link_nodes|pin_node|create_pillar|update_pillar|ask_clarification|noop",
+              "goal_id": "uuid?",
+              "goal_title": "string?",
+              "pillar_id": "uuid?",
+              "pillar_name": "string?",
+              "title": "string?",
+              "description": "string?",
+              "emoji": "string?",
+              "importance": 1-5?,
+              "nodes": [
+                {"type": "subgoal|task|note|resource|metric", "title": "string", "detail": "string?", "pinned": true|false, "weight": 0.1-1.0?}
+              ],
+              "pillar_ids": ["uuid"],
+              "pillar_names": ["string"],
+              "link_to_title": "string?",
+              "link_label": "string?",
+              "target_node_title": "string?",
+              "pin_state": true|false?,
+              "updates": {
+                "title": "string?",
+                "description": "string?",
+                "emoji": "string?",
+                "importance": 1-5?,
+                "wisdom": "string?",
+                "frequency": "daily|weekly|monthly|as_needed|Nx per week",
+                "quiet_hours": [ {"start": "HH:MM", "end": "HH:MM"} ],
+                "values": ["string"],
+                "constraints": ["string"],
+                "focus": "string?"
+              }
+            }
+          ]
+        }
+
+        - Prefer goal_id / pillar_id when you know the UUID, otherwise include goal_title / pillar_name.
+        - For quiet hours, use 24-hour HH:MM strings.
+        - If information is missing, return a single ask_clarification command with a clear question.
+        - Do not include commentary, markdown, or any text outside the JSON object.
+        """
+
+        let completion = try await generateCompletion(prompt: prompt)
+        let cleaned = sanitizeJSON(completion)
+        guard let data = cleaned.data(using: .utf8) else {
+            throw AIError.invalidResponse
+        }
+
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let responseModel = try decoder.decode(MindCommandResponseModel.self, from: data)
+        return responseModel.toMindCommandResponse()
+    }
+
     private func processEventCreation(_ message: String, context: DayContext, analysis: MessageActionAnalysis) async throws -> AIResponse {
         let eventCreationPrompt = """
         Create a specific time block/event from this user request: "\(message)"
@@ -613,47 +716,43 @@ class AIService: ObservableObject {
     
     private func processPillarCreation(_ message: String, context: DayContext, analysis: MessageActionAnalysis) async throws -> AIResponse {
         let pillarCreationPrompt = """
-        Create a pillar (core principle or actionable habit) from this user request: "\(message)"
-        
+        Create a principle-only pillar from this user request: "\(message)"
+
         Context: \(context.summary)
         Extracted entities: \(analysis.extractedEntities)
         Confidence: \(analysis.confidence)
-        
+
         Guidelines:
-        - actionable: Creates scheduled activities (exercise, meditation, work blocks, etc.)
-        - principle: Guides AI decisions but doesn't create events (values, beliefs, life rules)
-        
-        Analyze the message carefully and determine:
-        1. Is this asking for a recurring activity (actionable) or a life principle (principle)?
-        2. What's the appropriate frequency for actionable pillars?
-        3. What emoji best represents this pillar?
-        4. What time windows make sense for actionable pillars?
-        
+        - Pillars are guiding principles only. They never auto-book time.
+        - Focus on values, habits, constraints, and quiet hours that steer future suggestions.
+        - Choose cadence that reflects how often the pillar should receive attention.
+        - Provide up to 4 quiet hour windows the AI should protect.
+
         Respond in this EXACT JSON format with ALL fields populated:
         {
-            "response": "I'll create a \(analysis.extractedEntities["pillar_type"] ?? "pillar") for you",
+            "response": "I'll create a principle pillar for you",
             "pillar": {
-                "name": "Specific pillar name (max 20 chars)",
-                "description": "Detailed description explaining purpose and benefits",
-                "type": "actionable or principle",
-                "frequency": "daily, weekly, or as needed",
-                "minDuration": 1800,
-                "maxDuration": 3600,
-                "preferredTimeWindows": [
+                "name": "Specific pillar name (max 24 chars)",
+                "description": "Concise summary describing how it guides the user",
+                "frequency": "daily|weekly|monthly|as_needed",
+                "values": ["value keywords"],
+                "habits": ["habits to encourage"],
+                "constraints": ["guardrails to respect"],
+                "quietHours": [
                     {
-                        "startHour": 7,
+                        "startHour": 6,
                         "startMinute": 0,
-                        "endHour": 9,
+                        "endHour": 8,
                         "endMinute": 0
                     }
                 ],
-                "wisdomText": "Core principle text for principle types, null for actionable",
-                "emoji": "🏛️ or activity-specific emoji"
+                "wisdom": "Optional short mantra or principle text",
+                "emoji": "🏛️ or meaningful symbol"
             },
             "confidence": \(analysis.confidence)
         }
-        
-        Make the pillar practical and personally relevant. Choose emoji that matches the activity/principle.
+
+        Keep arrays tight (<=5 items). Use 24-hour clock for quiet hours. If the user doesn't supply data for a field, infer sensible defaults or return an empty array.
         """
         
         let response = try await generateCompletion(prompt: pillarCreationPrompt)
@@ -761,9 +860,6 @@ class AIService: ObservableObject {
         let pillarGuidanceText = context.pillarGuidance.isEmpty ? 
             "" : "\n\nUser's Core Principles (guide all suggestions):\n\(context.pillarGuidance.joined(separator: "\n"))"
         
-        let actionablePillarsText = context.actionablePillars.isEmpty ? 
-            "" : "\n\nActionable Pillars to consider:\n\(context.actionablePillars.map { "- \($0.name): \($0.description)" }.joined(separator: "\n"))"
-        
         return """
         You are a helpful day planning assistant. The user is planning their day and needs suggestions.
         
@@ -773,7 +869,7 @@ class AIService: ObservableObject {
         - Existing activities: \(context.existingBlocks.count)
         - Available time: \(Int(context.availableTime/3600)) hours
         - Mood: \(context.mood.description)
-        \(context.weatherContext != nil ? "- Weather: \(context.weatherContext!)" : "")\(pillarGuidanceText)\(actionablePillarsText)
+        \(context.weatherContext != nil ? "- Weather: \(context.weatherContext!)" : "")\(pillarGuidanceText)
         
         User message: "\(message)"
         
@@ -814,10 +910,17 @@ class AIService: ObservableObject {
     }
     
     private func generateCompletion(prompt: String) async throws -> String {
-        let url = URL(string: "\(baseURL)/v1/chat/completions")!
-        
-        let requestBody: [String: Any] = [
-            "model": "openai/gpt-oss-20b",
+        if provider == .openAI && openAIAPIKey.isEmpty {
+            throw AIError.notConnected
+        }
+
+        let endpoint = provider == .openAI ? "https://api.openai.com/v1/chat/completions" : "\(baseURL)/v1/chat/completions"
+        guard let url = URL(string: endpoint) else { throw AIError.requestFailed }
+
+        let model = provider == .openAI ? openAIModel : localModel
+
+        var requestBody: [String: Any] = [
+            "model": model,
             "messages": [
                 [
                     "role": "system",
@@ -836,9 +939,28 @@ class AIService: ObservableObject {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if provider == .openAI {
+            request.setValue("Bearer \(openAIAPIKey)", forHTTPHeaderField: "Authorization")
+        }
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
         
-        let (data, response) = try await session.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            if let urlError = error as? URLError {
+                switch urlError.code {
+                case .timedOut:
+                    throw AIError.timeout
+                case .notConnectedToInternet, .cannotFindHost, .cannotConnectToHost:
+                    throw AIError.notConnected
+                default:
+                    break
+                }
+            }
+            throw error
+        }
         
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AIError.requestFailed
@@ -861,12 +983,20 @@ class AIService: ObservableObject {
         return content ?? ""
     }
     
-    private func parseResponse(_ content: String) throws -> AIResponse {
-        // Clean up the response - sometimes models add markdown formatting
-        let cleanContent = content
+    private func sanitizeJSON(_ content: String) -> String {
+        let stripped = content
             .replacingOccurrences(of: "```json", with: "")
             .replacingOccurrences(of: "```", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let start = stripped.firstIndex(of: "{"), let end = stripped.lastIndex(of: "}") {
+            return String(stripped[start...end])
+        }
+        return stripped
+    }
+
+    private func parseResponse(_ content: String) throws -> AIResponse {
+        // Clean up the response - sometimes models add markdown formatting
+        let cleanContent = sanitizeJSON(content)
         
         // Try to extract JSON from the response
         guard let jsonData = cleanContent.data(using: .utf8) else {
@@ -1165,13 +1295,16 @@ class AIService: ObservableObject {
             // Ensure all required fields are present with smart defaults
             if enhancedPillarData["name"] == nil { enhancedPillarData["name"] = "New Pillar" }
             if enhancedPillarData["description"] == nil { enhancedPillarData["description"] = "AI-created pillar" }
-            if enhancedPillarData["type"] == nil { enhancedPillarData["type"] = "actionable" }
-            if enhancedPillarData["frequency"] == nil { enhancedPillarData["frequency"] = "daily" }
-            if enhancedPillarData["minDuration"] == nil { enhancedPillarData["minDuration"] = 1800 }
-            if enhancedPillarData["maxDuration"] == nil { enhancedPillarData["maxDuration"] = 3600 }
+            enhancedPillarData["type"] = "principle"
+            if enhancedPillarData["frequency"] == nil { enhancedPillarData["frequency"] = "weekly" }
+            if enhancedPillarData["values"] == nil { enhancedPillarData["values"] = [] }
+            if enhancedPillarData["habits"] == nil { enhancedPillarData["habits"] = [] }
+            if enhancedPillarData["constraints"] == nil { enhancedPillarData["constraints"] = [] }
+            if enhancedPillarData["quietHours"] == nil { enhancedPillarData["quietHours"] = [] }
+            if enhancedPillarData["wisdom"] == nil { enhancedPillarData["wisdom"] = NSNull() }
             if enhancedPillarData["emoji"] == nil { enhancedPillarData["emoji"] = "🏛️" }
             if enhancedPillarData["preferredTimeWindows"] == nil { enhancedPillarData["preferredTimeWindows"] = [] }
-            
+
             return AIResponse(
                 text: response,
                 suggestions: [],
@@ -1192,10 +1325,13 @@ class AIService: ObservableObject {
             let fallbackPillarData: [String: Any] = [
                 "name": "New Pillar",
                 "description": "AI-created pillar",
-                "type": "actionable",
-                "frequency": "daily",
-                "minDuration": 1800,
-                "maxDuration": 3600,
+                "type": "principle",
+                "frequency": "weekly",
+                "values": [],
+                "habits": [],
+                "constraints": [],
+                "quietHours": [],
+                "wisdom": NSNull(),
                 "emoji": "🏛️",
                 "preferredTimeWindows": []
             ]
@@ -1311,9 +1447,6 @@ class AIService: ObservableObject {
         let pillarGuidanceText = context.pillarGuidance.isEmpty ? 
             "" : "\n\nUser's Core Principles (guide all suggestions):\n\(context.pillarGuidance.joined(separator: "\n"))"
         
-        let actionablePillarsText = context.actionablePillars.isEmpty ? 
-            "" : "\n\nActionable Pillars to consider:\n\(context.actionablePillars.map { "- \($0.name): \($0.description)" }.joined(separator: "\n"))"
-        
         return """
         You are a helpful day planning assistant. The user is asking for suggestions: "\(message)"
         
@@ -1325,7 +1458,7 @@ class AIService: ObservableObject {
         - Mood: \(context.mood.description)
         - Intent confidence: \(analysis.confidence)
         - Context alignment: \(analysis.contextAlignment)
-        \(context.weatherContext != nil ? "- Weather: \(context.weatherContext!)" : "")\(pillarGuidanceText)\(actionablePillarsText)
+        \(context.weatherContext != nil ? "- Weather: \(context.weatherContext!)" : "")\(pillarGuidanceText)
         
         IMPORTANT: Always align suggestions with the user's core principles listed above. Consider:
         - Weather conditions for indoor/outdoor activities
@@ -1524,7 +1657,7 @@ private struct SuggestionJSON: Codable {
 
 // MARK: - Errors
 
-enum AIError: LocalizedError {
+enum AIError: LocalizedError, Equatable {
     case notConnected
     case requestFailed
     case invalidResponse
