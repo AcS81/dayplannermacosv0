@@ -41,7 +41,8 @@ class PatternLearningEngine: ObservableObject {
         self.dataManager = dataManager
         self.aiService = aiService
         loadPatterns()
-        
+        refreshActionableInsights()
+
         // Start pattern analysis timer for UI updates
         startPeriodicAnalysis()
     }
@@ -126,6 +127,7 @@ class PatternLearningEngine: ObservableObject {
             self.detectedPatterns = newPatterns.sorted { $0.confidence > $1.confidence }
             self.confidence = newPatterns.isEmpty ? 0.0 : newPatterns.map(\.confidence).reduce(0, +) / Double(newPatterns.count)
             self.generateInsights()
+            self.refreshActionableInsights()
         }
     }
     
@@ -150,6 +152,104 @@ class PatternLearningEngine: ObservableObject {
             }
             return allPatterns
         }
+    }
+
+    func refreshActionableInsightsFromData() {
+        refreshActionableInsights()
+    }
+
+    private func refreshActionableInsights() {
+        guard let dataManager = dataManager else {
+            actionableInsights = []
+            return
+        }
+
+        var newInsights: [ActionableInsight] = []
+        let pillars = dataManager.appState.pillars
+
+        if pillars.isEmpty {
+            newInsights.append(ActionableInsight(
+                title: "Define your first pillar",
+                description: "The planner doesn't have any guiding pillars yet. Add one so recommendations know what to protect.",
+                actionType: .createPillar,
+                priority: 5,
+                confidence: 0.85,
+                suggestedAction: "Open the Mind tab and create a pillar that captures a core principle.",
+                context: "Pillar coverage audit",
+                expiresAt: Date().addingTimeInterval(6 * 3600)
+            ))
+        } else {
+            let underDefined = pillars.filter { pillar in
+                !missingDetails(for: pillar).isEmpty
+            }
+
+            for pillar in underDefined.prefix(3) {
+                let missing = missingDetails(for: pillar)
+                guard !missing.isEmpty else { continue }
+                let missingText = formattedList(from: missing)
+                let description = "\(pillar.name) could be stronger with \(missingText)."
+                let suggestedAction = "Add \(missingText) in the Mind ▸ Pillars editor."
+                let confidence = min(0.95, 0.7 + Double(missing.count) * 0.05)
+
+                newInsights.append(ActionableInsight(
+                    title: "Enrich pillar \(pillar.emoji) \(pillar.name)",
+                    description: description,
+                    actionType: .createPillar,
+                    priority: 4,
+                    confidence: confidence,
+                    suggestedAction: suggestedAction,
+                    context: "Pillar definition quality",
+                    expiresAt: Date().addingTimeInterval(6 * 3600)
+                ))
+            }
+        }
+
+        let activeGoals = dataManager.appState.goals.filter { $0.isActive }
+        if activeGoals.isEmpty {
+            newInsights.append(ActionableInsight(
+                title: "Capture a guiding goal",
+                description: "Goals help the AI focus your pillars and schedule. None are active right now.",
+                actionType: .createGoal,
+                priority: 4,
+                confidence: 0.75,
+                suggestedAction: "Draft a goal in the Mind tab so the planner knows what you're working toward.",
+                context: "Goal coverage audit",
+                expiresAt: Date().addingTimeInterval(6 * 3600)
+            ))
+        } else if let goalNeedingBreakdown = activeGoals.first(where: { $0.needsBreakdown }) {
+            newInsights.append(ActionableInsight(
+                title: "Break down \(goalNeedingBreakdown.emoji) \(goalNeedingBreakdown.title)",
+                description: "This goal doesn't have supporting groups or tasks yet, so ghosts can't surface next actions.",
+                actionType: .updateGoal,
+                priority: 3,
+                confidence: 0.7,
+                suggestedAction: "Add a few tasks or milestones for this goal in Mind ▸ Goals.",
+                context: "Goal structure quality",
+                expiresAt: Date().addingTimeInterval(4 * 3600)
+            ))
+        }
+
+        actionableInsights = newInsights
+    }
+
+    private func missingDetails(for pillar: Pillar) -> [String] {
+        var missing: [String] = []
+
+        if pillar.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { missing.append("a description") }
+        if pillar.values.isEmpty { missing.append("values") }
+        if pillar.habits.isEmpty { missing.append("habits") }
+        if pillar.quietHours.isEmpty { missing.append("quiet hours") }
+        if (pillar.wisdomText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) { missing.append("guiding wisdom") }
+
+        return missing
+    }
+
+    private func formattedList(from items: [String]) -> String {
+        guard let first = items.first else { return "" }
+        if items.count == 1 { return first }
+        if items.count == 2 { return "\(items[0]) and \(items[1])" }
+        let prefix = items.dropLast().joined(separator: ", ")
+        return "\(prefix), and \(items.last!)"
     }
     
     /// Perform incremental pattern analysis (lighter weight)

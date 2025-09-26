@@ -764,13 +764,14 @@ class AppDataManager: ObservableObject {
         let normalized = normalizePillarDefinition(pillar)
         appState.pillars.append(normalized)
         save()
-        
+
         // Award XP for creating a pillar
         appState.addXP(15, reason: "Created pillar: \(normalized.name)")
-        
+
         onboardingDelegate?.onboardingDidCreatePillar(normalized)
+        patternEngine.refreshActionableInsightsFromData()
     }
-    
+
     func updatePillar(_ pillar: Pillar) {
         if let index = appState.pillars.firstIndex(where: { $0.id == pillar.id }) {
             let oldPillar = appState.pillars[index]
@@ -783,13 +784,15 @@ class AppDataManager: ObservableObject {
             }
             save()
         }
+        patternEngine.refreshActionableInsightsFromData()
     }
-    
+
     func removePillar(_ pillarId: UUID) {
         appState.pillars.removeAll { $0.id == pillarId }
         appState.emphasizedPillarIds.remove(pillarId)
         appState.pillarFeedbackStats.removeValue(forKey: pillarId)
         save()
+        patternEngine.refreshActionableInsightsFromData()
     }
 
     func makeMindEditorContext() -> MindEditorContext {
@@ -1614,8 +1617,9 @@ class AppDataManager: ObservableObject {
         }
         save()
         onboardingDelegate?.onboardingDidCreateGoal(enrichedGoal)
+        patternEngine.refreshActionableInsightsFromData()
     }
-    
+
     func updateGoal(_ goal: Goal) {
         if let index = appState.goals.firstIndex(where: { $0.id == goal.id }) {
             let oldGoal = appState.goals[index]
@@ -1634,13 +1638,15 @@ class AppDataManager: ObservableObject {
             }
         }
         save()
+        patternEngine.refreshActionableInsightsFromData()
     }
-    
+
     func removeGoal(id: UUID) {
         appState.goals.removeAll { $0.id == id }
         appState.pinnedGoalIds.remove(id)
         appState.goalFeedbackStats.removeValue(forKey: id)
         save()
+        patternEngine.refreshActionableInsightsFromData()
     }
     
     func toggleTaskCompletion(goalId: UUID, taskId: UUID) {
