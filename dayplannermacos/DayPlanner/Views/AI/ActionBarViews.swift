@@ -222,7 +222,11 @@ struct ActionBarView: View {
         
         // Add to history
         messageHistory.append(AIMessage(text: message, isUser: true, timestamp: Date()))
-        
+
+        if handleLocalIntents(message) {
+            return
+        }
+
         Task {
             // Show enhanced thinking state
             await MainActor.run {
@@ -263,7 +267,7 @@ struct ActionBarView: View {
             }
         }
     }
-    
+
     // MARK: - Voice Input
     
     // MARK: - Suggestion Handling (Staging System)
@@ -355,7 +359,7 @@ struct ActionBarView: View {
     // Detect if user is asking AI to schedule something
     private func isSchedulingRequest(_ message: String) -> Bool {
         let schedulingKeywords = [
-            "schedule", "book", "add", "create", "plan", "set up", "arrange", 
+            "schedule", "book", "add", "create", "plan", "set up", "arrange",
             "put in", "block", "reserve", "calendar", "time for", "remind me"
         ]
         
@@ -363,6 +367,130 @@ struct ActionBarView: View {
         return schedulingKeywords.contains { keyword in
             lowerMessage.contains(keyword)
         }
+    }
+
+    private func handleLocalIntents(_ message: String) -> Bool {
+        if let summary = generateDailySummaryIfNeeded(for: message) {
+            lastResponse = summary.text
+            lastConfidence = summary.confidence
+            pendingSuggestions.removeAll()
+            messageHistory.append(AIMessage(text: summary.text, isUser: false, timestamp: Date()))
+            showEphemeralInsight("🔒 Updated today's confirmations")
+            if speechService.isSpeaking {
+                speechService.stopSpeaking()
+            }
+            return true
+        }
+        return false
+    }
+
+    private func generateDailySummaryIfNeeded(for message: String) -> AIResponse? {
+        let lowercased = message.lowercased()
+        let triggers = [
+            "what have i done", "what did i do", "what have i accomplished",
+            "what did we do", "review today", "what happened today",
+            "summarise today", "summarize today", "how was today"
+        ]
+        guard triggers.contains(where: { lowercased.contains($0) }) else { return nil }
+
+        let calendar = Calendar.current
+        let currentDate = dataManager.appState.currentDay.date
+        let dayStart = calendar.startOfDay(for: currentDate)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? currentDate
+        let referencePoint = min(Date(), dayEnd)
+
+        let autoConfirmed = dataManager.autoConfirmPastBlocksIfNeeded(referenceDate: referencePoint)
+        let confirmedBlocks = dataManager.appState.currentDay.blocks
+            .filter { $0.confirmationState == .confirmed && $0.startTime <= referencePoint }
+            .sorted { $0.startTime < $1.startTime }
+
+        let text = buildDailySummaryText(
+            confirmedBlocks: confirmedBlocks,
+            autoConfirmed: autoConfirmed,
+            day: currentDate,
+            referencePoint: referencePoint
+        )
+
+        return AIResponse(
+            text: text,
+            suggestions: [],
+            actionType: .generalChat,
+            createdItems: nil,
+            confidence: 0.95
+        )
+    }
+
+    private func buildDailySummaryText(
+        confirmedBlocks: [TimeBlock],
+        autoConfirmed: [AutoConfirmedBlock],
+        day: Date,
+        referencePoint: Date
+    ) -> String {
+        let calendar = Calendar.current
+        let dayDescriptor: String
+        if calendar.isDateInToday(day) {
+            dayDescriptor = "today"
+        } else if calendar.isDateInYesterday(day) {
+            dayDescriptor = "yesterday"
+        } else {
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            dayDescriptor = formatter.string(from: day)
+        }
+
+        guard !confirmedBlocks.isEmpty else {
+            return "I don't have any confirmed activities for \(dayDescriptor) yet. Tell me what you'd like to log and I'll lock it in."
+        }
+
+        let autoIDs = Set(autoConfirmed.map(\.id))
+        var lines: [String] = []
+
+        if !autoConfirmed.isEmpty {
+            lines.append("I just locked these in:")
+            for block in autoConfirmed.sorted(by: { $0.startTime < $1.startTime }) {
+                var detail = "🔒 \(block.startTime.timeString) • \(block.title)"
+                if let note = sanitizedNoteText(block.note) {
+                    detail += " — \(note)"
+                }
+                lines.append(detail)
+            }
+        }
+
+        let previouslyLocked = confirmedBlocks.filter { !autoIDs.contains($0.id) }
+        if !previouslyLocked.isEmpty {
+            if !autoConfirmed.isEmpty { lines.append("") }
+            lines.append("Already confirmed \(dayDescriptor):")
+            for block in previouslyLocked {
+                var detail = "🔒 \(block.startTime.timeString) • \(block.title)"
+                if let note = sanitizedNoteText(block.notes?.components(separatedBy: "\n").last) {
+                    detail += " — \(note)"
+                }
+                lines.append(detail)
+            }
+        }
+
+        let totalMinutes = confirmedBlocks.reduce(0) { $0 + $1.durationMinutes }
+        let hours = totalMinutes / 60
+        let minutes = totalMinutes % 60
+        let durationSummary = hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
+        var summaryLine = "That's \(confirmedBlocks.count) confirmed block\(confirmedBlocks.count == 1 ? "" : "s") covering \(durationSummary)."
+
+        if let next = dataManager.appState.currentDay.blocks
+            .filter({ $0.startTime > referencePoint })
+            .sorted(by: { $0.startTime < $1.startTime })
+            .first {
+            summaryLine += " Next up: \(next.title) at \(next.startTime.timeString)."
+        }
+
+        lines.append("")
+        lines.append(summaryLine)
+        return lines.joined(separator: "\n")
+    }
+
+    private func sanitizedNoteText(_ note: String?) -> String? {
+        guard let note = note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty else { return nil }
+        let cleaned = note.replacingOccurrences(of: "🔒", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? nil : cleaned
     }
     
     // MARK: - Smart AI Response Handlers
@@ -388,8 +516,31 @@ struct ActionBarView: View {
         if response.confidence >= 0.7 { // Lowered threshold for better UX
             // High confidence - create the event directly with full details
             if let firstSuggestion = response.suggestions.first {
-                let targetTime = extractDateFromMessage(message) ?? findNextAvailableTime(after: Date())
-                
+                let referenceDate = dataManager.appState.currentDay.date
+                let parsed = parseEventTime(from: message, relativeTo: referenceDate)
+
+                var targetTime: Date
+                if let parsed {
+                    if parsed.hasExplicitDate {
+                        targetTime = parsed.date
+                    } else {
+                        targetTime = combine(referenceDate, withTimeFrom: parsed.date)
+                    }
+                    if !parsed.hasExplicitTime {
+                        targetTime = defaultStartTime(for: targetTime)
+                    }
+                } else {
+                    targetTime = defaultStartTime(for: referenceDate)
+                }
+
+                targetTime = findNextAvailableTime(startingAt: targetTime, duration: firstSuggestion.duration)
+
+                // Ensure we don't schedule in the past for today
+                let now = Date()
+                if Calendar.current.isDate(targetTime, inSameDayAs: now) && targetTime < now {
+                    targetTime = findNextAvailableTime(startingAt: now, duration: firstSuggestion.duration)
+                }
+
                 // Create fully populated time block
                 let timeBlock = TimeBlock(
                     title: firstSuggestion.title,
@@ -401,15 +552,15 @@ struct ActionBarView: View {
                     relatedGoalId: findRelatedGoal(for: firstSuggestion.title)?.id,
                     relatedPillarId: findRelatedPillar(for: firstSuggestion.title)?.id
                 )
-                
+
                 dataManager.addTimeBlock(timeBlock)
-                
+
                 // Award XP for successful AI scheduling
                 dataManager.appState.addXP(5, reason: "AI scheduled event")
-                
+
                 let dateString = Calendar.current.isDate(targetTime, inSameDayAs: Date()) ? "today" : targetTime.dayString
                 showEphemeralInsight("✨ Created \(timeBlock.title) for \(dateString) at \(targetTime.timeString)!")
-                
+
                 // Create related suggestions if this event could be part of a chain
                 suggestRelatedActivities(for: timeBlock, confidence: response.confidence)
             }
@@ -590,12 +741,27 @@ struct ActionBarView: View {
             
             if shouldCreateDirectly {
                 // Create events directly with enhanced details
-            let targetDate = extractDateFromMessage(message) ?? Date()
-                var createdCount = 0
-            
-            for (index, suggestion) in response.suggestions.enumerated() {
-                let suggestedTime = findNextAvailableTime(after: targetDate.addingTimeInterval(Double(index * 30 * 60)))
-                    
+            let referenceDate = dataManager.appState.currentDay.date
+            let parsedTarget = parseEventTime(from: message, relativeTo: referenceDate)
+            var baseStart: Date
+            if let parsedTarget {
+                if parsedTarget.hasExplicitDate {
+                    baseStart = parsedTarget.date
+                } else {
+                    baseStart = combine(referenceDate, withTimeFrom: parsedTarget.date)
+                }
+                if !parsedTarget.hasExplicitTime {
+                    baseStart = defaultStartTime(for: baseStart)
+                }
+            } else {
+                baseStart = defaultStartTime(for: referenceDate)
+            }
+            var createdCount = 0
+
+        for (index, suggestion) in response.suggestions.enumerated() {
+                let offsetStart = baseStart.addingTimeInterval(Double(index * 30 * 60))
+                let suggestedTime = findNextAvailableTime(startingAt: offsetStart, duration: suggestion.duration)
+
                     // Create fully populated time block with relationships
                     let timeBlock = TimeBlock(
                         title: suggestion.title,
@@ -611,8 +777,8 @@ struct ActionBarView: View {
                     dataManager.addTimeBlock(timeBlock)
                     createdCount += 1
                 }
-                
-            let dateString = Calendar.current.isDate(targetDate, inSameDayAs: Date()) ? "today" : targetDate.dayString
+
+            let dateString = Calendar.current.isDate(baseStart, inSameDayAs: Date()) ? "today" : baseStart.dayString
                 showEphemeralInsight("✨ Created \(createdCount) event\(createdCount == 1 ? "" : "s") for \(dateString)!")
             
                 // Award XP for successful AI scheduling
@@ -682,99 +848,138 @@ struct ActionBarView: View {
     }
     
     private func createContext() -> DayContext {
-        dataManager.createEnhancedContext()
+        dataManager.createEnhancedContext(date: dataManager.appState.currentDay.date)
     }
     
+    private struct ParsedEventTime {
+        let date: Date
+        let hasExplicitDate: Bool
+        let hasExplicitTime: Bool
+    }
+
     // MARK: - AI Scheduling Helper Functions
     
-    private func extractDateFromMessage(_ message: String) -> Date? {
+    private func parseEventTime(from message: String, relativeTo referenceDate: Date) -> ParsedEventTime? {
         let lowercased = message.lowercased()
         let calendar = Calendar.current
-        let now = Date()
-        
-        // Check for "today"
+        var baseDate: Date? = nil
+        var hasExplicitDate = false
+        var hasExplicitTime = false
+
         if lowercased.contains("today") {
-            return now
-        }
-        
-        // Check for "tomorrow"
-        if lowercased.contains("tomorrow") {
-            return calendar.date(byAdding: .day, value: 1, to: now)
-        }
-        
-        // Check for "next week"
-        if lowercased.contains("next week") {
-            return calendar.date(byAdding: .weekOfYear, value: 1, to: now)
-        }
-        
-        // Check for day names (monday, tuesday, etc.)
-        let dayNames = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
-        for (index, dayName) in dayNames.enumerated() {
-            if lowercased.contains(dayName) {
-                let targetWeekday = index + 2 // Monday = 2 in Calendar.current
-                let adjustedWeekday = targetWeekday > 7 ? 1 : targetWeekday
-                
+            baseDate = referenceDate
+            hasExplicitDate = true
+        } else if lowercased.contains("tomorrow") {
+            baseDate = calendar.date(byAdding: .day, value: 1, to: referenceDate)
+            hasExplicitDate = true
+        } else if lowercased.contains("yesterday") {
+            baseDate = calendar.date(byAdding: .day, value: -1, to: referenceDate)
+            hasExplicitDate = true
+        } else if lowercased.contains("next week") {
+            baseDate = calendar.date(byAdding: .weekOfYear, value: 1, to: referenceDate)
+            hasExplicitDate = true
+        } else {
+            let weekdaySymbols = calendar.weekdaySymbols.map { $0.lowercased() }
+            for (index, symbol) in weekdaySymbols.enumerated() where lowercased.contains(symbol) {
                 var components = DateComponents()
-                components.weekday = adjustedWeekday
-                
-                // Find next occurrence of this weekday
-                if let nextDate = calendar.nextDate(after: now, matching: components, matchingPolicy: .nextTime) {
-                    return nextDate
+                components.weekday = index + 1
+                if let nextDate = calendar.nextDate(after: referenceDate, matching: components, matchingPolicy: .nextTime) {
+                    baseDate = nextDate
+                    hasExplicitDate = true
+                    break
                 }
             }
         }
-        
-        // Check for time patterns like "at 3pm", "at 15:00"
-        let timeRegex = try? NSRegularExpression(pattern: "at\\s+(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)?", options: .caseInsensitive)
+
+        // Relative "in X hours/minutes"
+        let relativePattern = try? NSRegularExpression(pattern: "in\\s+(\\d+)\\s+(hour|hours|hr|hrs|minute|min|minutes|mins)", options: .caseInsensitive)
+        if let regex = relativePattern {
+            let range = NSRange(location: 0, length: message.count)
+            if let match = regex.firstMatch(in: message, options: [], range: range),
+               let valueRange = Range(match.range(at: 1), in: message),
+               let value = Double(message[valueRange]) {
+                let unitRange = Range(match.range(at: 2), in: message)
+                let unit = unitRange.map { String(message[$0]).lowercased() } ?? "hours"
+                let multiplier: TimeInterval = unit.contains("min") ? 60 : 3600
+                let offset = value * multiplier
+                let target = Date().addingTimeInterval(offset)
+                return ParsedEventTime(date: target, hasExplicitDate: true, hasExplicitTime: true)
+            }
+        }
+
+        var components = calendar.dateComponents([.hour, .minute], from: Date())
+        let timeRegex = try? NSRegularExpression(pattern: "(at|@)\\s*(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)?", options: .caseInsensitive)
         if let regex = timeRegex {
             let range = NSRange(location: 0, length: message.count)
             if let match = regex.firstMatch(in: message, options: [], range: range) {
-                let hourRange = match.range(at: 1)
-                let minuteRange = match.range(at: 2)
-                let ampmRange = match.range(at: 3)
-                
-                if let hourString = Range(hourRange, in: message).map({ String(message[$0]) }),
-                   let hour = Int(hourString) {
-                    
-                    let minute = minuteRange.location != NSNotFound ? 
-                        Range(minuteRange, in: message).map({ Int(String(message[$0])) }) ?? 0 : 0
-                    
-                    let isPM = ampmRange.location != NSNotFound ? 
-                        Range(ampmRange, in: message).map({ String(message[$0]).lowercased() == "pm" }) ?? false : false
-                    
-                    let adjustedHour = isPM && hour != 12 ? hour + 12 : (hour == 12 && !isPM ? 0 : hour)
-                    
-                    return calendar.date(bySettingHour: adjustedHour, minute: minute ?? 0, second: 0, of: now)
+                if let hourRange = Range(match.range(at: 2), in: message),
+                   let hour = Int(message[hourRange]) {
+                    var minute = 0
+                    if let minuteRange = Range(match.range(at: 3), in: message) {
+                        minute = Int(message[minuteRange]) ?? 0
+                    }
+                    var adjustedHour = hour
+                    if let ampmRange = Range(match.range(at: 4), in: message) {
+                        let marker = String(message[ampmRange]).lowercased()
+                        if marker == "pm" && hour != 12 { adjustedHour += 12 }
+                        if marker == "am" && hour == 12 { adjustedHour = 0 }
+                    }
+                    components.hour = adjustedHour
+                    components.minute = minute
+                    hasExplicitTime = true
                 }
             }
         }
-        
-        // Default to current time if no specific date/time found
+
+        let base = baseDate ?? referenceDate
+        if hasExplicitTime {
+            if let hour = components.hour, let minute = components.minute,
+               let date = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: base) {
+                return ParsedEventTime(date: date, hasExplicitDate: hasExplicitDate, hasExplicitTime: true)
+            }
+        } else if let baseDate {
+            return ParsedEventTime(date: baseDate, hasExplicitDate: hasExplicitDate, hasExplicitTime: false)
+        }
+
         return nil
     }
-    
-    private func findNextAvailableTime(after startTime: Date) -> Date {
-        let allBlocks = dataManager.appState.currentDay.blocks
-        let sortedBlocks = allBlocks.sorted { $0.startTime < $1.startTime }
-        
+
+    private func findNextAvailableTime(startingAt startTime: Date, duration: TimeInterval) -> Date {
+        let minimumDuration = max(duration, 15 * 60)
+        let sortedBlocks = dataManager.appState.currentDay.blocks.sorted { $0.startTime < $1.startTime }
+
         var searchTime = startTime
-        let minimumDuration: TimeInterval = 30 * 60 // 30 minutes minimum slot
-        
-        // Look for gaps in the schedule
+        let now = Date()
+        if Calendar.current.isDate(searchTime, inSameDayAs: now), searchTime < now {
+            searchTime = now
+        }
+
         for block in sortedBlocks {
-            // If there's enough time before this block
+            if block.endTime <= searchTime { continue }
             if searchTime.addingTimeInterval(minimumDuration) <= block.startTime {
                 return searchTime
             }
-            
-            // Move search time to after this block
-            if block.endTime > searchTime {
-                searchTime = block.endTime
-            }
+            searchTime = max(searchTime, block.endTime)
         }
-        
-        // If no gaps found, return the time after the last block
+
         return searchTime
+    }
+
+    private func combine(_ date: Date, withTimeFrom timeSource: Date) -> Date {
+        let calendar = Calendar.current
+        var components = calendar.dateComponents([.year, .month, .day], from: date)
+        let timeComponents = calendar.dateComponents([.hour, .minute, .second], from: timeSource)
+        components.hour = timeComponents.hour
+        components.minute = timeComponents.minute
+        components.second = timeComponents.second ?? 0
+        return calendar.date(from: components) ?? date
+    }
+
+    private func defaultStartTime(for date: Date) -> Date {
+        let calendar = Calendar.current
+        let preferred = dataManager.appState.preferences.preferredStartTime
+        let prefComponents = calendar.dateComponents([.hour, .minute], from: preferred)
+        return calendar.date(bySettingHour: prefComponents.hour ?? 9, minute: prefComponents.minute ?? 0, second: 0, of: date) ?? date
     }
     
     // MARK: - Smart Relationship Detection

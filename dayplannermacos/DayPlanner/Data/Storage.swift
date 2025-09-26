@@ -524,12 +524,18 @@ class AppDataManager: ObservableObject {
             let pillarInfo = pillarBoost(for: suggestion, weighting: weighting)
             let feedbackInfo = feedbackBoost(for: suggestion, weighting: weighting)
             let totalBoost = goalInfo.boost + pillarInfo.boost + feedbackInfo.boost
-            let finalScore = (baseScore + totalBoost) * suggestion.confidence
+            let rejectionPenalty = ghostRejectionPenalty(for: suggestion)
+            let finalScore = (baseScore + totalBoost) * suggestion.confidence * rejectionPenalty
             var updated = suggestion
             updated.weight = finalScore
             updated.reason = combinedReason(
                 base: suggestion.reason ?? suggestion.explanation,
-                additions: [goalInfo.annotation, pillarInfo.annotation, feedbackInfo.annotation]
+                additions: [
+                    goalInfo.annotation,
+                    pillarInfo.annotation,
+                    feedbackInfo.annotation,
+                    ghostRejectionAnnotation(for: suggestion, penalty: rejectionPenalty)
+                ]
             )
             return WeightedSuggestion(
                 suggestion: updated,
@@ -682,18 +688,38 @@ class AppDataManager: ObservableObject {
     func nextUnconfirmedBlock() -> TimeBlock? {
         unconfirmedBlocks.first
     }
-    
-    func confirmBlock(_ blockId: UUID, notes: String? = nil) {
+
+    @discardableResult
+    func autoConfirmPastBlocksIfNeeded(referenceDate: Date = Date()) -> [AutoConfirmedBlock] {
+        let confirmationTime = Date()
+        let weatherSnapshot = weatherService.currentWeather
+        var results: [AutoConfirmedBlock] = []
+
+        for block in appState.currentDay.blocks where block.endTime <= referenceDate && block.confirmationState != .confirmed {
+            let note = buildAutoConfirmationNote(for: block, confirmationTime: confirmationTime, weather: weatherSnapshot)
+            confirmBlock(block.id, notes: note, confirmedAt: confirmationTime, skipSave: true)
+            if let refreshed = appState.currentDay.blocks.first(where: { $0.id == block.id }) {
+                results.append(AutoConfirmedBlock(block: refreshed, note: note, confirmationTime: confirmationTime))
+            }
+        }
+
+        if !results.isEmpty {
+            save()
+        }
+
+        return results
+    }
+
+    func confirmBlock(_ blockId: UUID, notes: String? = nil, confirmedAt: Date = Date(), skipSave: Bool = false) {
         guard let index = appState.currentDay.blocks.firstIndex(where: { $0.id == blockId }) else { return }
         var block = appState.currentDay.blocks[index]
         let trimmedNotes = notes?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let trimmedNotes, !trimmedNotes.isEmpty {
-            block.notes = trimmedNotes
-        }
+        block.notes = mergeNotes(existing: block.notes, additional: trimmedNotes)
         block.confirmationState = .confirmed
         block.glassState = .solid
         appState.currentDay.blocks[index] = block
-        
+
+        appState.records.removeAll { $0.blockId == block.id }
         let record = Record(
             blockId: block.id,
             title: block.title,
@@ -702,11 +728,13 @@ class AppDataManager: ObservableObject {
             notes: block.notes,
             energy: block.energy,
             emoji: block.emoji,
-            confirmedAt: Date()
+            confirmedAt: confirmedAt
         )
         appState.records.append(record)
         appState.todoItems.removeAll { $0.followUp?.blockId == block.id }
-        save()
+        if !skipSave {
+            save()
+        }
     }
     
     func undoRecord(_ recordId: UUID) {
@@ -754,7 +782,78 @@ class AppDataManager: ObservableObject {
         appState.todoItems.insert(item, at: 0)
         save()
     }
-    
+
+    private func buildAutoConfirmationNote(for block: TimeBlock, confirmationTime: Date, weather: WeatherInfo?) -> String {
+        var components: [String] = ["🔒 Confirmed at \(confirmationTime.timeString)"]
+        if let weather {
+            let temperature = Int(weather.temperature)
+            components.append("Weather check: \(weather.condition.emoji) \(weather.condition.rawValue) \(temperature)°F")
+        }
+        return components.joined(separator: ". ")
+    }
+
+    private func mergeNotes(existing: String?, additional: String?) -> String? {
+        let trimmedExisting = existing?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedAdditional = additional?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        switch (trimmedExisting?.isEmpty ?? true, trimmedAdditional?.isEmpty ?? true) {
+        case (true, true):
+            return nil
+        case (false, true):
+            return trimmedExisting
+        case (true, false):
+            return trimmedAdditional
+        case (false, false):
+            return [trimmedExisting!, trimmedAdditional!].joined(separator: "\n")
+        }
+    }
+
+    func ghostFingerprint(for suggestion: Suggestion) -> String {
+        let startKey = Int(suggestion.suggestedTime.timeIntervalSinceReferenceDate / 60)
+        return "\(suggestion.title.lowercased())|\(Int(suggestion.duration))|\(suggestion.energy.rawValue)|\(startKey)"
+    }
+
+    func recordGhostRejectionMemory(for suggestion: Suggestion, reason: String? = nil) {
+        let key = ghostFingerprint(for: suggestion)
+        var info = appState.ghostRejectionMemory[key] ?? GhostRejectionInfo()
+        info.registerRejection(for: suggestion.title)
+        appState.ghostRejectionMemory[key] = info
+        rejectSuggestion(suggestion, reason: reason ?? "ghost_rejection")
+    }
+
+    func clearGhostRejectionMemory(for suggestion: Suggestion) {
+        let key = ghostFingerprint(for: suggestion)
+        appState.ghostRejectionMemory.removeValue(forKey: key)
+    }
+
+    func ghostRejectionInfo(for suggestion: Suggestion) -> GhostRejectionInfo? {
+        appState.ghostRejectionMemory[ghostFingerprint(for: suggestion)]
+    }
+
+    func shouldCooldownGhostSuggestion(_ suggestion: Suggestion, cooldown: TimeInterval = 900) -> Bool {
+        guard let info = ghostRejectionInfo(for: suggestion) else { return false }
+        return Date().timeIntervalSince(info.lastRejectedAt) < cooldown
+    }
+
+    private func ghostRejectionPenalty(for suggestion: Suggestion) -> Double {
+        guard let info = ghostRejectionInfo(for: suggestion) else { return 1.0 }
+        let penalty = 1.0 - min(Double(info.count) * 0.2, 0.6)
+        return max(penalty, 0.4)
+    }
+
+    private func ghostRejectionAnnotation(for suggestion: Suggestion, penalty: Double) -> String? {
+        guard let info = ghostRejectionInfo(for: suggestion) else { return nil }
+        let timeSince = Date().timeIntervalSince(info.lastRejectedAt)
+        if timeSince < 600 {
+            return "Cooling down after you passed on this slot"
+        }
+        let countText = info.count > 1 ? "(adjusted \(info.count)×)" : "(adjusted)"
+        if penalty < 1.0 {
+            return "Refined from previous feedback \(countText)"
+        }
+        return nil
+    }
+
     // MARK: - Chain Operations
     
     func addChain(_ chain: Chain) {
@@ -1221,6 +1320,14 @@ class AppDataManager: ObservableObject {
 
     /// Create enhanced context with pillar guidance for AI decisions
     func createEnhancedContext(date: Date = Date()) -> DayContext {
+        let calendar = Calendar.current
+        let dayStart = calendar.startOfDay(for: date)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? date
+        let referencePoint = min(Date(), dayEnd)
+        if referencePoint >= dayStart {
+            _ = autoConfirmPastBlocksIfNeeded(referenceDate: referencePoint)
+        }
+
         let principleGuidance = appState.pillars
             .map { $0.aiGuidanceText }
             .filter { !$0.isEmpty }
@@ -2287,7 +2394,8 @@ class AppDataManager: ObservableObject {
     /// Enhanced applySuggestion with pattern learning
     func applySuggestion(_ suggestion: Suggestion) {
         var block = suggestion.toTimeBlock()
-        
+        clearGhostRejectionMemory(for: suggestion)
+
         // Record that suggestion was accepted
         recordSuggestionFeedback(suggestion, accepted: true)
         

@@ -674,6 +674,7 @@ struct AppState: Codable {
     var todoItems: [TodoItem] = []
     var moodEntries: [MoodEntry] = []
     var onboarding: OnboardingState = OnboardingState()
+    var ghostRejectionMemory: [String: GhostRejectionInfo] = [:]
     
     // Scheduling emphasis and feedback signals
     var pinnedGoalIds: Set<UUID> = []
@@ -733,9 +734,39 @@ struct Record: Identifiable, Codable {
     var energy: EnergyType
     var emoji: String
     var confirmedAt: Date = Date()
-    
+
     var duration: TimeInterval {
         endTime.timeIntervalSince(startTime)
+    }
+}
+
+struct AutoConfirmedBlock: Identifiable, Codable {
+    var id: UUID
+    var title: String
+    var startTime: Date
+    var endTime: Date
+    var note: String?
+    var confirmationTime: Date
+
+    init(block: TimeBlock, note: String?, confirmationTime: Date) {
+        self.id = block.id
+        self.title = block.title
+        self.startTime = block.startTime
+        self.endTime = block.endTime
+        self.note = note
+        self.confirmationTime = confirmationTime
+    }
+}
+
+struct GhostRejectionInfo: Codable {
+    var count: Int = 0
+    var lastRejectedAt: Date = Date()
+    var lastTitle: String = ""
+
+    mutating func registerRejection(for title: String) {
+        count += 1
+        lastRejectedAt = Date()
+        lastTitle = title
     }
 }
 

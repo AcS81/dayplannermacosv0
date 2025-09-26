@@ -72,7 +72,8 @@ struct EnhancedDayView: View {
                     ghostSuggestions: ghostSuggestions,
                     dayStartHour: dayStartHour,
                     selectedGhosts: $selectedGhostIDs,
-                    onGhostToggle: toggleGhostSelection
+                    onGhostToggle: toggleGhostSelection,
+                    onGhostReject: rejectGhostSuggestion
                 )
                 .padding(.trailing, 2)
                 .padding(.bottom, ghostAcceptanceInset)
@@ -207,6 +208,31 @@ struct EnhancedDayView: View {
                 confidence: 0.9,
                 weight: Double.random(in: 0.2...0.95)
             )
+        }
+    }
+
+    private func rejectGhostSuggestion(_ suggestion: Suggestion) {
+        dataManager.recordGhostRejectionMemory(for: suggestion)
+        selectedGhostIDs.remove(suggestion.id)
+
+        let removal = {
+            ghostSuggestions.removeAll { $0.id == suggestion.id }
+        }
+
+        if reduceMotion {
+            removal()
+        } else {
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) {
+                removal()
+            }
+        }
+
+        onGhostAcceptanceChange?(acceptanceInfo)
+
+        guard showingRecommendations, !diagnosticsOverride else { return }
+
+        Task { @MainActor in
+            await refreshGhosts(reason: .rejectedSuggestion)
         }
     }
 
