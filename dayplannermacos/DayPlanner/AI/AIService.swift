@@ -1185,10 +1185,15 @@ class AIService: ObservableObject {
                 return UUID(uuidString: rawString)
             }
             let explanation = eventData["explanation"] as? String ?? "AI-generated activity"
+            let startTime = parseDate(from: eventData["startTime"])
+                ?? parseDate(from: eventData["start"])
+                ?? parseDate(from: eventData["scheduledFor"])
+                ?? Date()
+            let duration = normalizeDuration(eventData["duration"])
             let suggestion = Suggestion(
                 title: eventData["title"] as? String ?? "New Activity",
-                duration: TimeInterval((eventData["duration"] as? Int ?? 1800)),
-                suggestedTime: Date(),
+                duration: duration,
+                suggestedTime: startTime,
                 energy: EnergyType(rawValue: eventData["energy"] as? String ?? "daylight") ?? .daylight,
                 emoji: eventData["emoji"] as? String ?? "📋",
                 explanation: explanation,
@@ -1520,7 +1525,7 @@ class AIService: ObservableObject {
             let suggestions = parsed.suggestions.prefix(2).map { suggestionJSON in
                 Suggestion(
                     title: suggestionJSON.title,
-                    duration: TimeInterval(suggestionJSON.duration * 60),
+                    duration: normalizeDuration(Double(suggestionJSON.duration)),
                     suggestedTime: Date(),
                     energy: EnergyType(rawValue: suggestionJSON.energy) ?? .daylight,
                     emoji: suggestionJSON.emoji,
@@ -1553,6 +1558,54 @@ class AIService: ObservableObject {
                 confidence: analysis.confidence
             )
         }
+    }
+
+    private func parseDate(from anyValue: Any?) -> Date? {
+        if let date = anyValue as? Date { return date }
+        if let timestamp = anyValue as? TimeInterval {
+            return Date(timeIntervalSince1970: timestamp)
+        }
+        if let timestampInt = anyValue as? Int {
+            return Date(timeIntervalSince1970: TimeInterval(timestampInt))
+        }
+        guard let rawString = anyValue as? String else { return nil }
+
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = isoFormatter.date(from: rawString) {
+            return date
+        }
+        isoFormatter.formatOptions = [.withInternetDateTime]
+        if let date = isoFormatter.date(from: rawString) {
+            return date
+        }
+
+        let fallbackFormatter = DateFormatter()
+        fallbackFormatter.dateStyle = .short
+        fallbackFormatter.timeStyle = .short
+        if let date = fallbackFormatter.date(from: rawString) {
+            return date
+        }
+
+        return nil
+    }
+
+    private func normalizeDuration(_ raw: Any?) -> TimeInterval {
+        switch raw {
+        case let seconds as TimeInterval:
+            return seconds >= 600 ? seconds : seconds * 60
+        case let number as NSNumber:
+            let value = number.doubleValue
+            if value >= 600 { return value }
+            return value * 60
+        case let string as String:
+            if let number = Double(string) {
+                return number >= 600 ? number : number * 60
+            }
+        default:
+            break
+        }
+        return 1800
     }
 }
 

@@ -2,28 +2,6 @@
 
 import SwiftUI
 
-struct GhostAcceptanceInfo: Equatable {
-    let totalCount: Int
-    let selectedCount: Int
-    let acceptAll: () -> Void
-    let acceptSelected: () -> Void
-    
-    static func == (lhs: GhostAcceptanceInfo, rhs: GhostAcceptanceInfo) -> Bool {
-        return lhs.totalCount == rhs.totalCount && lhs.selectedCount == rhs.selectedCount
-    }
-}
-
-struct GhostAcceptancePreferenceKey: PreferenceKey {
-    static var defaultValue: GhostAcceptanceInfo? = nil
-    static func reduce(value: inout GhostAcceptanceInfo?, nextValue: () -> GhostAcceptanceInfo?) {
-        if let update = nextValue() {
-            value = update
-        } else {
-            value = nil
-        }
-    }
-}
-
 struct EnhancedDayView: View {
     @EnvironmentObject private var dataManager: AppDataManager
     @EnvironmentObject private var aiService: AIService
@@ -82,9 +60,6 @@ struct EnhancedDayView: View {
                 )
                 .padding(.trailing, 2)
                 .padding(.bottom, ghostAcceptanceInset)
-                .background(
-                    Color.clear.preference(key: GhostAcceptancePreferenceKey.self, value: acceptanceInfo)
-                )
             }
             .scrollIndicators(.hidden)
             .scrollDisabled(draggedBlock != nil) // Disable scroll when dragging an event
@@ -158,8 +133,21 @@ struct EnhancedDayView: View {
                 }
             )
         }
+        .overlay(alignment: .bottom) {
+            if showingRecommendations && !ghostSuggestions.isEmpty {
+                GhostAcceptanceBar(
+                    totalCount: ghostSuggestions.count,
+                    selectedCount: selectedGhostIDs.count,
+                    onAcceptAll: acceptAllGhosts,
+                    onAcceptSelected: acceptSelectedGhosts
+                )
+                .padding(.horizontal, 20)
+                .padding(.bottom, 16)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
     }
-    
+
     private var allBlocksForDay: [TimeBlock] {
         dataManager.appState.currentDay.blocks.sorted { $0.startTime < $1.startTime }
     }
@@ -172,16 +160,6 @@ struct EnhancedDayView: View {
 
     private var ghostAcceptanceInset: CGFloat {
         (showingRecommendations && !ghostSuggestions.isEmpty) ? 168 : 24
-    }
-
-    private var acceptanceInfo: GhostAcceptanceInfo? {
-        guard showingRecommendations && !ghostSuggestions.isEmpty else { return nil }
-        return GhostAcceptanceInfo(
-            totalCount: ghostSuggestions.count,
-            selectedCount: selectedGhostIDs.count,
-            acceptAll: acceptAllGhosts,
-            acceptSelected: acceptSelectedGhosts
-        )
     }
 
     private func makeDiagnosticsSuggestions(count: Int) -> [Suggestion] {
@@ -305,7 +283,8 @@ private extension EnhancedDayView {
                 isToday: isToday,
                 now: now,
                 minimumDuration: minimumDuration,
-                placed: placed
+                placed: placed,
+                date: date
             ) else {
                 continue
             }
@@ -324,9 +303,11 @@ private extension EnhancedDayView {
         isToday: Bool,
         now: Date,
         minimumDuration: TimeInterval,
-        placed: [Suggestion]
+        placed: [Suggestion],
+        date: Date
     ) -> (start: Date, duration: TimeInterval)? {
         var index = 0
+        let preference = preferredTimeWindow(for: suggestion, on: date)
         while index < gaps.count {
             var gap = gaps[index]
             let adjustedStart = isToday ? max(gap.start, now) : gap.start
@@ -340,6 +321,37 @@ private extension EnhancedDayView {
             var startTime = snapUpToNearestFiveMinutes(adjustedStart)
             if startTime < adjustedStart {
                 startTime = adjustedStart
+            }
+
+            if let preference {
+                if gap.end <= preference.start {
+                    index += 1
+                    continue
+                }
+
+                if preference.end <= adjustedStart {
+                    index += 1
+                    continue
+                }
+
+                let windowStart = max(adjustedStart, preference.start)
+                let windowEnd = min(gap.end, preference.end)
+
+                if windowEnd <= windowStart {
+                    index += 1
+                    continue
+                }
+
+                if startTime < windowStart {
+                    startTime = windowStart
+                }
+
+                if startTime >= windowEnd {
+                    index += 1
+                    continue
+                }
+
+                gap.end = min(gap.end, windowEnd)
             }
 
             if startTime >= gap.end {
@@ -391,6 +403,33 @@ private extension EnhancedDayView {
         }
 
         return nil
+    }
+
+    func preferredTimeWindow(for suggestion: Suggestion, on date: Date) -> DateInterval? {
+        let calendar = Calendar.current
+        let dayStart = calendar.startOfDay(for: date)
+
+        func interval(startHour: Int, endHour: Int) -> DateInterval? {
+            guard let start = calendar.date(byAdding: .hour, value: startHour, to: dayStart),
+                  let end = calendar.date(byAdding: .hour, value: endHour, to: dayStart),
+                  end > start else { return nil }
+            return DateInterval(start: start, end: end)
+        }
+
+        let loweredTitle = suggestion.title.lowercased()
+        if loweredTitle.contains("breakfast") { return interval(startHour: 6, endHour: 11) }
+        if loweredTitle.contains("lunch") { return interval(startHour: 11, endHour: 15) }
+        if loweredTitle.contains("dinner") || loweredTitle.contains("supper") { return interval(startHour: 17, endHour: 21) }
+        if loweredTitle.contains("sleep") || loweredTitle.contains("bed") { return interval(startHour: 21, endHour: 24) }
+
+        switch suggestion.energy {
+        case .sunrise:
+            return interval(startHour: 5, endHour: 11)
+        case .daylight:
+            return interval(startHour: 9, endHour: 17)
+        case .moonlight:
+            return interval(startHour: 17, endHour: 23)
+        }
     }
     
     func computeGaps(for date: Date) -> [TimeGap] {

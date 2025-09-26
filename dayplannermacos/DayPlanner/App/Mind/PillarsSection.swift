@@ -1203,7 +1203,15 @@ struct ComprehensivePillarCreatorSheet: View {
     }
 
     private func decodeSuggestion(from responseText: String) -> PillarSuggestion? {
-        let cleaned = responseText.trimmingCharacters(in: .whitespacesAndNewlines)
+        var cleaned = responseText
+            .replacingOccurrences(of: "```json", with: "")
+            .replacingOccurrences(of: "```", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.first == "{" && cleaned.last == "}" {
+            // already trimmed
+        } else if let start = cleaned.firstIndex(of: "{"), let end = cleaned.lastIndex(of: "}") {
+            cleaned = String(cleaned[start...end])
+        }
         guard let start = cleaned.firstIndex(of: "{"), let end = cleaned.lastIndex(of: "}") else { return nil }
         let jsonSlice = cleaned[start...end]
         guard let data = jsonSlice.data(using: .utf8) else { return nil }

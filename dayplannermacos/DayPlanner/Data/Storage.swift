@@ -1039,6 +1039,10 @@ class AppDataManager: ObservableObject {
             }
         }
 
+        if outcome.hasChanges {
+            requestMicroUpdate(.pinChange)
+        }
+
         return outcome
     }
 
@@ -1204,16 +1208,48 @@ class AppDataManager: ObservableObject {
             .map { $0.aiGuidanceText }
             .filter { !$0.isEmpty }
 
+        let sortedBlocks = appState.currentDay.blocks.sorted { $0.startTime < $1.startTime }
+        let preferredEmojis = Array(sortedBlocks.suffix(3).map { $0.emoji }.reversed())
+        let currentEnergy = sortedBlocks.last?.energy ?? appState.preferences.favoriteEnergy
+        let availableTime = computeAvailableTime(on: date, with: sortedBlocks)
+
         return DayContext(
             date: date,
-            existingBlocks: appState.currentDay.blocks,
-            currentEnergy: .daylight,
-            preferredEmojis: ["🌊"],
-            availableTime: 3600,
+            existingBlocks: sortedBlocks,
+            currentEnergy: currentEnergy,
+            preferredEmojis: preferredEmojis.isEmpty ? [appState.preferences.favoriteEmoji] : preferredEmojis,
+            availableTime: availableTime,
             mood: appState.currentDay.mood,
             weatherContext: weatherService.getWeatherContext(),
             pillarGuidance: principleGuidance
         )
+    }
+
+    private func computeAvailableTime(on date: Date, with blocks: [TimeBlock]) -> TimeInterval {
+        let calendar = Calendar.current
+        let dayStart = calendar.startOfDay(for: date)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart.addingTimeInterval(86_400)
+
+        guard !blocks.isEmpty else { return dayEnd.timeIntervalSince(dayStart) }
+
+        var available: TimeInterval = 0
+        var cursor = dayStart
+
+        for block in blocks.sorted(by: { $0.startTime < $1.startTime }) {
+            let clampedStart = max(block.startTime, dayStart)
+            if clampedStart > cursor {
+                available += clampedStart.timeIntervalSince(cursor)
+            }
+            let clampedEnd = min(block.endTime, dayEnd)
+            cursor = max(cursor, clampedEnd)
+            if cursor >= dayEnd { break }
+        }
+
+        if cursor < dayEnd {
+            available += dayEnd.timeIntervalSince(cursor)
+        }
+
+        return max(available, 0)
     }
     
     private func findGaps(in interval: DateInterval, existingBlocks: [TimeBlock]) -> [DateInterval] {

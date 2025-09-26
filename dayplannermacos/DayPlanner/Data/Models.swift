@@ -633,15 +633,63 @@ struct DayContext: Codable {
         Available: \(Int(availableTime/3600))h
         Mood: \(mood.description)
         """
-        
+
         if let weather = weatherContext {
             summary += "\nWeather: \(weather)"
         }
-        
+
         if !pillarGuidance.isEmpty {
             summary += "\nGuiding principles: \(pillarGuidance.joined(separator: "; "))"
         }
-        
+
+        let now = Date()
+        let upcoming = existingBlocks
+            .filter { $0.endTime > now }
+            .sorted { $0.startTime < $1.startTime }
+            .prefix(3)
+
+        if !upcoming.isEmpty {
+            let timeFormatter = DateFormatter()
+            timeFormatter.dateStyle = .none
+            timeFormatter.timeStyle = .short
+
+            let eventLines = upcoming.map { block -> String in
+                let timeString = timeFormatter.string(from: block.startTime)
+                let durationMinutes = Int(block.duration / 60)
+                return "- \(timeString): \(block.title) (\(durationMinutes)m)"
+            }
+
+            summary += "\nNext events:\n\(eventLines.joined(separator: "\n"))"
+        }
+
+        let recent = existingBlocks
+            .filter { $0.endTime <= now }
+            .sorted { $0.startTime < $1.startTime }
+            .suffix(3)
+
+        if !recent.isEmpty {
+            let timeFormatter = DateFormatter()
+            timeFormatter.dateStyle = .none
+            timeFormatter.timeStyle = .short
+
+            let eventLines = recent.map { block -> String in
+                let timeString = timeFormatter.string(from: block.startTime)
+                let durationMinutes = Int(block.duration / 60)
+                let statusIcon: String
+                switch block.confirmationState {
+                case .confirmed:
+                    statusIcon = "✅"
+                case .unconfirmed:
+                    statusIcon = "⏳"
+                case .scheduled:
+                    statusIcon = "📌"
+                }
+                return "- \(statusIcon) \(timeString): \(block.title) (\(durationMinutes)m)"
+            }
+
+            summary += "\nRecent events:\n\(eventLines.joined(separator: "\n"))"
+        }
+
         return summary
     }
 }
