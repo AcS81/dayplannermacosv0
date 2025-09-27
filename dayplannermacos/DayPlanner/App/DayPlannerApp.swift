@@ -11637,39 +11637,35 @@ struct FloatingActionBarView: View {
         let calendar = Calendar.current
         let now = Date()
         
-        // Check for "today"
+        // Step 1: Determine target day (store day offset first, don't return early)
+        var targetDay = now
+        
         if lowercased.contains("today") {
-            return now
-        }
-        
-        // Check for "tomorrow"
-        if lowercased.contains("tomorrow") {
-            return calendar.date(byAdding: .day, value: 1, to: now)
-        }
-        
-        // Check for "next week"
-        if lowercased.contains("next week") {
-            return calendar.date(byAdding: .weekOfYear, value: 1, to: now)
-        }
-        
-        // Check for day names (monday, tuesday, etc.)
-        let dayNames = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
-        for (index, dayName) in dayNames.enumerated() {
-            if lowercased.contains(dayName) {
-                let targetWeekday = index + 2 // Monday = 2 in Calendar.current
-                let adjustedWeekday = targetWeekday > 7 ? 1 : targetWeekday
-                
-                var components = DateComponents()
-                components.weekday = adjustedWeekday
-                
-                // Find next occurrence of this weekday
-                if let nextDate = calendar.nextDate(after: now, matching: components, matchingPolicy: .nextTime) {
-                    return nextDate
+            targetDay = now
+        } else if lowercased.contains("tomorrow") {
+            targetDay = calendar.date(byAdding: .day, value: 1, to: now) ?? now
+        } else if lowercased.contains("next week") {
+            targetDay = calendar.date(byAdding: .weekOfYear, value: 1, to: now) ?? now
+        } else {
+            // Check for specific weekdays
+            let dayNames = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+            for (index, dayName) in dayNames.enumerated() {
+                if lowercased.contains(dayName) {
+                    let targetWeekday = index + 2 // Monday = 2 in Calendar
+                    let adjustedWeekday = targetWeekday > 7 ? 1 : targetWeekday
+                    
+                    var components = DateComponents()
+                    components.weekday = adjustedWeekday
+                    
+                    if let nextDate = calendar.nextDate(after: now, matching: components, matchingPolicy: .nextTime) {
+                        targetDay = nextDate
+                        break
+                    }
                 }
             }
         }
         
-        // Check for time patterns like "at 3pm", "at 15:00"
+        // Step 2: Extract explicit time if provided
         let timeRegex = try? NSRegularExpression(pattern: "at\\s+(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)?", options: .caseInsensitive)
         if let regex = timeRegex {
             let range = NSRange(location: 0, length: message.count)
@@ -11689,13 +11685,25 @@ struct FloatingActionBarView: View {
                     
                     let adjustedHour = isPM && hour != 12 ? hour + 12 : (hour == 12 && !isPM ? 0 : hour)
                     
-                    return calendar.date(bySettingHour: adjustedHour, minute: minute ?? 0, second: 0, of: now)
+                    // Apply explicit time to resolved day
+                    return calendar.date(bySettingHour: adjustedHour, minute: minute ?? 0, second: 0, of: targetDay)
                 }
             }
         }
         
-        // Default to current time if no specific date/time found
-        return nil
+        // Step 3: Apply default time if no explicit time found
+        if !calendar.isDate(targetDay, inSameDayAs: now) {
+            // For future days, use current time or next available slot
+            let currentHour = calendar.component(.hour, from: now)
+            let currentMinute = calendar.component(.minute, from: now)
+            
+            if let defaultTime = calendar.date(bySettingHour: currentHour, minute: currentMinute, second: 0, of: targetDay) {
+                return defaultTime
+            }
+        }
+        
+        // For same day or fallback, use current time
+        return targetDay
     }
     
     private func findNextAvailableTime(after startTime: Date) -> Date {
@@ -16697,3 +16705,5 @@ struct DraggableChainTemplate: View {
         dataManager.applyChain(chain, startingAt: Date())
     }
 }
+
+

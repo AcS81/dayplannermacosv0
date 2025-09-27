@@ -33,7 +33,7 @@ struct FixedPositionEventCard: View {
                     VStack(spacing: 2) {
                         Text(block.energy.rawValue)
                             .font(.caption)
-                        Text(block.emoji)
+                        Text(block.displayEmoji)
                             .font(.caption)
                     }
                     .opacity(0.8)

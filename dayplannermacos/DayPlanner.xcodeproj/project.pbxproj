@@ -373,7 +373,6 @@
 				B110974A40C74BD3BD60294D /* CalendarHeader.swift in Sources */,
 				879E2B4CE22A4AAB80E37E25 /* MonthViewExpanded.swift in Sources */,
 				C4866EDC1B7640AC820680CE /* EnhancedDayView.swift in Sources */,
-				C4866EDC1B7640AC820680CF /* InfiniteDayScrollView.swift in Sources */,
 				F5D4996328464CC5B82B9469 /* ProportionalTimelineView.swift in Sources */,
 				3BE0261813D54EB690E75068 /* PreciseEventCard.swift in Sources */,
 				D2ECC4782E5B474990EA55B3 /* ChainComponents.swift in Sources */,

@@ -72,7 +72,8 @@ struct EnhancedDayView: View {
                     ghostSuggestions: ghostSuggestions,
                     dayStartHour: dayStartHour,
                     selectedGhosts: $selectedGhostIDs,
-                    onGhostToggle: toggleGhostSelection
+                    onGhostToggle: toggleGhostSelection,
+                    onGhostDismiss: dismissGhost
                 )
                 .padding(.trailing, 2)
                 .padding(.bottom, ghostAcceptanceInset)
@@ -585,6 +586,32 @@ private extension EnhancedDayView {
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             await refreshGhosts(force: true, reason: .acceptedSuggestion)
+        }
+    }
+    
+    func dismissGhost(_ suggestion: Suggestion) {
+        // Record rejection for learning
+        dataManager.rejectSuggestion(suggestion, reason: "User dismissed from ghost overlay")
+        
+        // Remove from current suggestions
+        let removal = {
+            ghostSuggestions.removeAll { $0.id == suggestion.id }
+        }
+        if reduceMotion {
+            removal()
+        } else {
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.9)) {
+                removal()
+            }
+        }
+        selectedGhostIDs.remove(suggestion.id)
+        
+        updateAcceptanceInfo()
+        
+        // Refresh suggestions to incorporate rejection memory
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay
+            await refreshGhosts(force: true, reason: .rejectedSuggestion)
         }
     }
     

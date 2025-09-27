@@ -8,6 +8,7 @@ struct GhostOverlay: View {
     let suggestions: [Suggestion]
     @Binding var selectedGhosts: Set<UUID>
     let onToggle: (Suggestion) -> Void
+    let onDismiss: (Suggestion) -> Void
     
     var body: some View {
         ForEach(suggestions) { suggestion in
@@ -17,7 +18,8 @@ struct GhostOverlay: View {
                 dayStartHour: dayStartHour,
                 minuteHeight: minuteHeight,
                 isSelected: selectedGhosts.contains(suggestion.id),
-                onToggle: { onToggle(suggestion) }
+                onToggle: { onToggle(suggestion) },
+                onDismiss: { onDismiss(suggestion) }
             )
             .transition(reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 0.98)))
         }
@@ -36,6 +38,7 @@ private struct GhostEventCard: View {
     let minuteHeight: CGFloat
     let isSelected: Bool
     let onToggle: () -> Void
+    let onDismiss: () -> Void
     
     @EnvironmentObject private var dataManager: AppDataManager
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -166,9 +169,20 @@ private struct GhostEventCard: View {
                             .lineLimit(2)
                         Spacer()
                         VStack(alignment: .trailing, spacing: 2) {
-                            Text(suggestion.suggestedTime.timeString)
-                                .font(.caption2)
-                                .foregroundStyle(Color.white.opacity(0.7))
+                            HStack(spacing: 4) {
+                                Text(suggestion.suggestedTime.timeString)
+                                    .font(.caption2)
+                                    .foregroundStyle(Color.white.opacity(0.7))
+                                
+                                // Dismiss button
+                                Button(action: onDismiss) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.caption2)
+                                        .foregroundStyle(Color.white.opacity(0.6))
+                                }
+                                .buttonStyle(.plain)
+                                .help("Dismiss this suggestion")
+                            }
                             
                             // Add visual hint for interaction
                             if !isSelected {

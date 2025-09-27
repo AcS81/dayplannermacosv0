@@ -422,7 +422,7 @@ struct AITrustSettingsView: View {
                 UserDefaults.standard.set(whisperApiKey, forKey: "whisperApiKey")
             }
             
-            aiService.configure(with: dataManager.appState.preferences)
+            // AI service is already configured on app startup - no need to reconfigure here
         }
     }
 

@@ -889,6 +889,7 @@ struct EventContext: Codable {
 enum BehaviorEventType: Codable {
     case blockCreated(TimeBlockData)
     case blockCompleted(TimeBlockData, success: Bool, actualDuration: TimeInterval?)
+    case blockConfirmed(TimeBlockData)
     case blockModified(TimeBlockData, changes: String)
     case chainApplied(ChainData)
     case suggestionAccepted(SuggestionData)
@@ -898,6 +899,7 @@ enum BehaviorEventType: Codable {
     case pillarActivated(pillarId: String, duration: TimeInterval)
     case feedbackGiven(FeedbackBehaviorData)
     case moodLogged(MoodEntry)
+    case completionWithNotes(CompletionData)
 }
 
 // Simplified data structures for behavior tracking
@@ -944,6 +946,14 @@ struct FeedbackBehaviorData: Codable {
     let targetType: FeedbackTargetType
     let tags: [FeedbackTag]
     let comment: String?
+}
+
+struct CompletionData: Codable {
+    let blockId: String
+    let title: String
+    let userNotes: String
+    let weatherContext: String
+    let confirmedAt: Date
 }
 
 // MARK: - Strongly-Typed Pattern Data

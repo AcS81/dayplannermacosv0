@@ -155,6 +155,9 @@ class AIService: ObservableObject {
     @Published var isProcessing = false
     @Published var lastResponseTime: TimeInterval = 0
     
+    // Track timestamp parsing errors for diagnostics
+    private var timestampParsingErrors: [String] = []
+    
     private var provider: AIProvider = .local
     private var baseURL: String = "http://localhost:1234"
     private var customEndpoint: String = "http://localhost:1234"
@@ -671,7 +674,7 @@ class AIService: ObservableObject {
         """
         
         let response = try await generateCompletion(prompt: eventCreationPrompt)
-        return try parseEventCreationResponse(response, analysis: analysis)
+        return try parseEventCreationResponse(response, analysis: analysis, context: context)
     }
     
     private func processGoalCreation(_ message: String, context: DayContext, analysis: MessageActionAnalysis) async throws -> AIResponse {
@@ -1189,7 +1192,213 @@ class AIService: ObservableObject {
         }
     }
     
-    private func parseEventCreationResponse(_ content: String, analysis: MessageActionAnalysis) throws -> AIResponse {
+    // MARK: - Enhanced Time Parsing
+    
+    private func parseFlexibleTimeString(_ timeString: String, context: DayContext) -> Date? {
+        // Try ISO8601 formats first
+        let iso8601Formatter = ISO8601DateFormatter()
+        iso8601Formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let parsedTime = iso8601Formatter.date(from: timeString) {
+            return parsedTime
+        }
+        
+        // Try without fractional seconds
+        let fallbackFormatter = ISO8601DateFormatter()
+        if let fallbackTime = fallbackFormatter.date(from: timeString) {
+            return fallbackTime
+        }
+        
+        // Try relative time parsing (e.g., "in 1 hour", "tomorrow at 3pm")
+        if let relativeTime = parseRelativeTimeString(timeString, context: context) {
+            return relativeTime
+        }
+        
+        // Try simple time formats (e.g., "3:30 PM", "15:30")
+        if let simpleTime = parseSimpleTimeString(timeString, context: context) {
+            return simpleTime
+        }
+        
+        return nil
+    }
+    
+    private func parseRelativeTimeString(_ timeString: String, context: DayContext) -> Date? {
+        let lowercased = timeString.lowercased()
+        let calendar = Calendar.current
+        let now = Date()
+        
+        // Handle "in X minutes/hours"
+        if let match = lowercased.firstMatch(of: /in (\d+) (minute|hour)s?/) {
+            let amount = Int(match.1) ?? 0
+            let unit = match.2
+            
+            if unit == "minute" {
+                return calendar.date(byAdding: .minute, value: amount, to: now)
+            } else if unit == "hour" {
+                return calendar.date(byAdding: .hour, value: amount, to: now)
+            }
+        }
+        
+        // Handle "tomorrow"
+        if lowercased.contains("tomorrow") {
+            let tomorrow = calendar.date(byAdding: .day, value: 1, to: now) ?? now
+            // If specific time mentioned, extract it
+            if let timeMatch = lowercased.firstMatch(of: /at (\d{1,2}):?(\d{2})?\s*(am|pm)?/) {
+                let hour = Int(timeMatch.1) ?? 9
+                let minute = Int(timeMatch.2 ?? "0") ?? 0
+                let isPM = timeMatch.3 == "pm"
+                
+                var adjustedHour = hour
+                if isPM && hour != 12 {
+                    adjustedHour += 12
+                } else if !isPM && hour == 12 {
+                    adjustedHour = 0
+                }
+                
+                return calendar.date(bySettingHour: adjustedHour, minute: minute, second: 0, of: tomorrow)
+            }
+            return tomorrow
+        }
+        
+        // Handle "next week", "next Monday", etc.
+        if lowercased.contains("next week") {
+            return calendar.date(byAdding: .weekOfYear, value: 1, to: now)
+        }
+        
+        // Handle "next [day of week]"
+        let weekdays = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+        for (index, weekday) in weekdays.enumerated() {
+            if lowercased.contains("next \(weekday)") {
+                let targetWeekday = index + 2 // Monday = 2 in Calendar
+                let currentWeekday = calendar.component(.weekday, from: now)
+                let daysToAdd = (targetWeekday - currentWeekday + 7) % 7
+                let daysToAddAdjusted = daysToAdd == 0 ? 7 : daysToAdd // If same day, go to next week
+                return calendar.date(byAdding: .day, value: daysToAddAdjusted, to: now)
+            }
+        }
+        
+        // Handle "this [day of week]"
+        for (index, weekday) in weekdays.enumerated() {
+            if lowercased.contains("this \(weekday)") {
+                let targetWeekday = index + 2 // Monday = 2 in Calendar
+                let currentWeekday = calendar.component(.weekday, from: now)
+                let daysToAdd = (targetWeekday - currentWeekday + 7) % 7
+                return calendar.date(byAdding: .day, value: daysToAdd, to: now)
+            }
+        }
+        
+        return nil
+    }
+    
+    private func parseSimpleTimeString(_ timeString: String, context: DayContext) -> Date? {
+        let calendar = Calendar.current
+        let today = context.date
+        
+        // Try 12-hour format (e.g., "3:30 PM", "3 PM")
+        let lowercased = timeString.lowercased()
+        if let match = lowercased.firstMatch(of: /(\d{1,2}):?(\d{2})?\s*(am|pm)/) {
+            let hour = Int(match.1) ?? 9
+            let minute = Int(match.2 ?? "0") ?? 0
+            let isPM = match.3 == "pm"
+            
+            var adjustedHour = hour
+            if isPM && hour != 12 {
+                adjustedHour += 12
+            } else if !isPM && hour == 12 {
+                adjustedHour = 0
+            }
+            
+            return calendar.date(bySettingHour: adjustedHour, minute: minute, second: 0, of: today)
+        }
+        
+        // Try 24-hour format (e.g., "15:30", "15")
+        if let match = timeString.firstMatch(of: /(\d{1,2}):?(\d{2})?/) {
+            let hour = Int(match.1) ?? 9
+            let minute = Int(match.2 ?? "0") ?? 0
+            
+            if hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59 {
+                return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: today)
+            }
+        }
+        
+        return nil
+    }
+    
+    private func getIntelligentDefaultTime(context: DayContext) -> Date {
+        let calendar = Calendar.current
+        let now = Date()
+        
+        // Find next available slot in the day with better overlap detection
+        let existingBlocks = context.existingBlocks.sorted { $0.startTime < $1.startTime }
+        
+        // Look for gaps between existing blocks with improved logic
+        for i in 0..<existingBlocks.count - 1 {
+            let currentBlock = existingBlocks[i]
+            let nextBlock = existingBlocks[i + 1]
+            let gap = nextBlock.startTime.timeIntervalSince(currentBlock.endTime)
+            
+            // If there's a reasonable gap (at least 30 minutes), suggest the middle
+            if gap >= 1800 { // 30 minutes
+                let middleTime = currentBlock.endTime.addingTimeInterval(gap / 2)
+                // Ensure the suggested time doesn't conflict with any existing blocks
+                if !hasOverlap(with: middleTime, duration: 1800, existingBlocks: existingBlocks) {
+                    return middleTime
+                }
+            }
+        }
+        
+        // Check for gap at the end of the day
+        if let lastBlock = existingBlocks.last {
+            let endOfDay = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: now) ?? now
+            let gapToEndOfDay = endOfDay.timeIntervalSince(lastBlock.endTime)
+            if gapToEndOfDay >= 1800 { // 30 minutes
+                let suggestedTime = lastBlock.endTime.addingTimeInterval(300) // 5 minutes after last block
+                if !hasOverlap(with: suggestedTime, duration: 1800, existingBlocks: existingBlocks) {
+                    return suggestedTime
+                }
+            }
+        }
+        
+        // If no good gaps, suggest 1 hour from now or next hour boundary
+        let oneHourFromNow = calendar.date(byAdding: .hour, value: 1, to: now) ?? now
+        let nextHour = calendar.date(bySettingHour: calendar.component(.hour, from: now) + 1, minute: 0, second: 0, of: now) ?? now
+        
+        let suggestedTime = max(oneHourFromNow, nextHour)
+        
+        // Final overlap check
+        if !hasOverlap(with: suggestedTime, duration: 1800, existingBlocks: existingBlocks) {
+            return suggestedTime
+        }
+        
+        // If all else fails, find the next available slot
+        return findNextAvailableSlot(after: suggestedTime, existingBlocks: existingBlocks)
+    }
+    
+    private func hasOverlap(with startTime: Date, duration: TimeInterval, existingBlocks: [TimeBlock]) -> Bool {
+        let endTime = startTime.addingTimeInterval(duration)
+        
+        return existingBlocks.contains { block in
+            let blockEndTime = block.endTime
+            return startTime < blockEndTime && endTime > block.startTime
+        }
+    }
+    
+    private func findNextAvailableSlot(after startTime: Date, existingBlocks: [TimeBlock]) -> Date {
+        let calendar = Calendar.current
+        var currentTime = startTime
+        
+        // Look for the next available 30-minute slot
+        while currentTime < calendar.date(byAdding: .day, value: 1, to: startTime) ?? startTime {
+            if !hasOverlap(with: currentTime, duration: 1800, existingBlocks: existingBlocks) {
+                return currentTime
+            }
+            currentTime = calendar.date(byAdding: .minute, value: 15, to: currentTime) ?? currentTime
+        }
+        
+        // Fallback to tomorrow morning
+        return calendar.date(bySettingHour: 9, minute: 0, second: 0, of: calendar.date(byAdding: .day, value: 1, to: startTime) ?? startTime) ?? startTime
+    }
+    
+    private func parseEventCreationResponse(_ content: String, analysis: MessageActionAnalysis, context: DayContext) throws -> AIResponse {
         let cleanContent = content
             .replacingOccurrences(of: "```json", with: "")
             .replacingOccurrences(of: "```", with: "")
@@ -1212,10 +1421,28 @@ class AIService: ObservableObject {
                 return UUID(uuidString: rawString)
             }
             let explanation = eventData["explanation"] as? String ?? "AI-generated activity"
+            
+            // Parse startTime from eventData with enhanced resolution
+            let suggestedTime: Date
+            if let startTimeString = eventData["startTime"] as? String {
+                // Try multiple parsing strategies for better time resolution
+                if let parsedTime = parseFlexibleTimeString(startTimeString, context: context) {
+                    suggestedTime = parsedTime
+                } else {
+                    let errorMessage = "Failed to parse startTime '\(startTimeString)', using current time"
+                    print("⚠️ AI Service: \(errorMessage)")
+                    timestampParsingErrors.append(errorMessage)
+                    suggestedTime = Date()
+                }
+            } else {
+                // If no start time provided, use intelligent default based on context
+                suggestedTime = getIntelligentDefaultTime(context: context)
+            }
+            
             let suggestion = Suggestion(
                 title: eventData["title"] as? String ?? "New Activity",
                 duration: TimeInterval((eventData["duration"] as? Int ?? 1800)),
-                suggestedTime: Date(),
+                suggestedTime: suggestedTime,
                 energy: EnergyType(rawValue: eventData["energy"] as? String ?? "daylight") ?? .daylight,
                 emoji: eventData["emoji"] as? String ?? "📋",
                 explanation: explanation,
@@ -1753,6 +1980,19 @@ extension AIService {
             } catch {
                 diagnostics += "AI Response: ❌ \(error.localizedDescription)\n"
             }
+        }
+        
+        // Report timestamp parsing errors
+        if !timestampParsingErrors.isEmpty {
+            diagnostics += "\nTimestamp Parsing Issues:\n"
+            for error in timestampParsingErrors.suffix(5) { // Show last 5 errors
+                diagnostics += "⚠️ \(error)\n"
+            }
+            if timestampParsingErrors.count > 5 {
+                diagnostics += "... and \(timestampParsingErrors.count - 5) more errors\n"
+            }
+        } else {
+            diagnostics += "\nTimestamp Parsing: ✅ No issues detected\n"
         }
         
         return diagnostics

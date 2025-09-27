@@ -36,7 +36,7 @@ struct PreciseEventCard: View {
                 VStack(spacing: 1) {
                     Text(block.energy.rawValue)
                         .font(.caption)
-                    Text(block.emoji)
+                    Text(block.displayEmoji)
                         .font(.caption2)
                 }
                 .opacity(0.8)
@@ -45,8 +45,8 @@ struct PreciseEventCard: View {
                 // Block content
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
-                        if !block.emoji.isEmpty {
-                            Text(block.emoji)
+                        if !block.displayEmoji.isEmpty {
+                            Text(block.displayEmoji)
                                 .font(.caption)
                         }
                         
@@ -246,7 +246,7 @@ struct EnhancedTimeBlockCard: View {
                 VStack(spacing: 2) {
                     Text(block.energy.rawValue)
                         .font(.title3)
-                    Text(block.emoji)
+                    Text(block.displayEmoji)
                         .font(.caption)
                 }
                 .opacity(0.8)

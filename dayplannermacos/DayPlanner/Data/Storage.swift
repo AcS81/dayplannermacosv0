@@ -523,8 +523,9 @@ class AppDataManager: ObservableObject {
             let goalInfo = goalBoost(for: suggestion, weighting: weighting)
             let pillarInfo = pillarBoost(for: suggestion, weighting: weighting)
             let feedbackInfo = feedbackBoost(for: suggestion, weighting: weighting)
-            let totalBoost = goalInfo.boost + pillarInfo.boost + feedbackInfo.boost
-            let finalScore = (baseScore + totalBoost) * suggestion.confidence
+            let rejectionPenalty = rejectionPenalty(for: suggestion)
+            let totalBoost = goalInfo.boost + pillarInfo.boost + feedbackInfo.boost - rejectionPenalty
+            let finalScore = max(0, (baseScore + totalBoost) * suggestion.confidence)
             var updated = suggestion
             updated.weight = finalScore
             updated.reason = combinedReason(
@@ -611,6 +612,41 @@ class AppDataManager: ObservableObject {
         return (boost, summary)
     }
 
+    private func rejectionPenalty(for suggestion: Suggestion) -> Double {
+        let calendar = Calendar.current
+        let suggestionDate = calendar.startOfDay(for: suggestion.suggestedTime)
+        
+        // Check for recent rejections in similar time slots
+        let recentRejections = appState.rejectedTimeSlots.filter { rejectedSlot in
+            // Same day or recent days
+            let daysDiff = calendar.dateComponents([.day], from: rejectedSlot.date, to: suggestionDate).day ?? 0
+            guard abs(daysDiff) <= 7 else { return false }
+            
+            // Similar time slot (within 30 minutes)
+            let timeDiff = abs(rejectedSlot.startTime.timeIntervalSince(suggestion.suggestedTime))
+            guard timeDiff <= 1800 else { return false }
+            
+            // Similar duration (within 15 minutes)
+            let durationDiff = abs(rejectedSlot.endTime.timeIntervalSince(rejectedSlot.startTime) - suggestion.duration)
+            guard durationDiff <= 900 else { return false }
+            
+            return true
+        }
+        
+        // Calculate penalty based on recency and frequency
+        let now = Date()
+        var totalPenalty = 0.0
+        
+        for rejection in recentRejections {
+            let daysSinceRejection = calendar.dateComponents([.day], from: rejection.rejectedAt, to: now).day ?? 0
+            let recencyFactor = max(0.1, 1.0 - Double(daysSinceRejection) / 7.0) // Decay over 7 days
+            let penalty = 0.3 * recencyFactor // Base penalty of 0.3, decaying over time
+            totalPenalty += penalty
+        }
+        
+        return min(totalPenalty, 1.0) // Cap at 1.0 to avoid completely eliminating suggestions
+    }
+
     private func combinedReason(base: String?, additions: [String?]) -> String? {
         let trimmedBase = base?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let extras = additions.compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
@@ -686,10 +722,35 @@ class AppDataManager: ObservableObject {
     func confirmBlock(_ blockId: UUID, notes: String? = nil) {
         guard let index = appState.currentDay.blocks.firstIndex(where: { $0.id == blockId }) else { return }
         var block = appState.currentDay.blocks[index]
-        let trimmedNotes = notes?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let trimmedNotes, !trimmedNotes.isEmpty {
-            block.notes = trimmedNotes
+        
+        // Create enhanced notes with weather context and timestamp
+        let weatherContext = weatherService.getWeatherContext()
+        let timestamp = Date()
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        let formattedTimestamp = formatter.string(from: timestamp)
+        
+        // Create structured confirmation note
+        let confirmationHeader = "🔒 Confirmed: \(formattedTimestamp)"
+        let weatherInfo = "🌤️ \(weatherContext)"
+        
+        var enhancedNotes = ""
+        if let trimmedNotes = notes?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmedNotes.isEmpty {
+            enhancedNotes = """
+            \(trimmedNotes)
+            
+            \(confirmationHeader)
+            \(weatherInfo)
+            """
+        } else {
+            enhancedNotes = """
+            \(confirmationHeader)
+            \(weatherInfo)
+            """
         }
+        
+        block.notes = enhancedNotes
         block.confirmationState = .confirmed
         block.glassState = .solid
         appState.currentDay.blocks[index] = block
@@ -702,10 +763,14 @@ class AppDataManager: ObservableObject {
             notes: block.notes,
             energy: block.energy,
             emoji: block.emoji,
-            confirmedAt: Date()
+            confirmedAt: timestamp
         )
         appState.records.append(record)
         appState.todoItems.removeAll { $0.followUp?.blockId == block.id }
+        
+        // Record confirmation completion for pattern learning
+        recordConfirmationCompletion(for: block, userNotes: notes, weatherContext: weatherContext)
+        
         save()
     }
     
@@ -1942,6 +2007,47 @@ class AppDataManager: ObservableObject {
         patternEngine.recordBehavior(behaviorEvent)
     }
     
+    /// Record confirmation completion for pattern learning
+    private func recordConfirmationCompletion(for block: TimeBlock, userNotes: String?, weatherContext: String) {
+        let behaviorEvent = BehaviorEvent(
+            .blockConfirmed(TimeBlockData(
+                id: block.id.uuidString,
+                title: block.title,
+                emoji: block.emoji,
+                energy: block.energy,
+                duration: block.duration,
+                period: block.period
+            )),
+            context: EventContext(
+                energyLevel: block.energy,
+                mood: appState.currentDay.mood,
+                weatherCondition: weatherContext
+            )
+        )
+        
+        patternEngine.recordBehavior(behaviorEvent)
+        
+        // Also record the completion with user notes for better pattern recognition
+        if let notes = userNotes, !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let completionEvent = BehaviorEvent(
+                .completionWithNotes(CompletionData(
+                    blockId: block.id.uuidString,
+                    title: block.title,
+                    userNotes: notes,
+                    weatherContext: weatherContext,
+                    confirmedAt: Date()
+                )),
+                context: EventContext(
+                    energyLevel: block.energy,
+                    mood: appState.currentDay.mood,
+                    weatherCondition: weatherContext
+                )
+            )
+            
+            patternEngine.recordBehavior(completionEvent)
+        }
+    }
+    
     /// Record when suggestions are accepted or rejected for learning
     func recordSuggestionFeedback(_ suggestion: Suggestion, accepted: Bool, reason: String? = nil) {
         let suggestionData = SuggestionData(
@@ -2311,7 +2417,7 @@ class AppDataManager: ObservableObject {
         requestMicroUpdate(.acceptedSuggestion)
     }
     
-    /// Enhanced rejectSuggestion with pattern learning
+    /// Enhanced rejectSuggestion with pattern learning and time-slot memory
     func rejectSuggestion(_ suggestion: Suggestion, reason: String? = nil) {
         // Record rejection for learning
         recordSuggestionFeedback(suggestion, accepted: false, reason: reason)
@@ -2321,6 +2427,23 @@ class AppDataManager: ObservableObject {
         if !appState.userPatterns.contains(rejectionPattern) {
             appState.userPatterns.append(rejectionPattern)
         }
+        
+        // Record time-slot rejection for schedule fingerprint learning
+        let rejectedSlot = RejectedTimeSlot(
+            date: Calendar.current.startOfDay(for: suggestion.suggestedTime),
+            startTime: suggestion.suggestedTime,
+            endTime: suggestion.suggestedTime.addingTimeInterval(suggestion.duration),
+            title: suggestion.title,
+            emoji: suggestion.emoji,
+            energy: suggestion.energy,
+            reason: reason
+        )
+        appState.rejectedTimeSlots.append(rejectedSlot)
+        
+        // Clean up old rejections (keep last 30 days)
+        let thirtyDaysAgo = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+        appState.rejectedTimeSlots.removeAll { $0.rejectedAt < thirtyDaysAgo }
+        
         save()
         requestMicroUpdate(.rejectedSuggestion)
     }

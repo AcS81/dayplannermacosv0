@@ -53,7 +53,7 @@ struct CalendarPanel: View {
                 .animation(.spring(response: 0.6, dampingFraction: 0.8), value: showingMonthView)
             }
             
-            // Day view - enhanced with infinite scrolling (only show when not in month view)
+            // Day view - enhanced with liquid glass styling (only show when not in month view)
             if !showingMonthView {
                 EnhancedDayView(
                     selectedDate: $selectedDate,

@@ -44,6 +44,14 @@ struct TimeBlock: Identifiable, Codable, Equatable, Transferable {
         Int(duration / 60)
     }
     
+    // Display emoji for timeline cards - shows lock for confirmed blocks
+    var displayEmoji: String {
+        if confirmationState == .confirmed {
+            return "🔒"
+        }
+        return emoji.isEmpty ? "📋" : emoji
+    }
+    
     // Time period this block belongs to
     var period: TimePeriod {
         let hour = Calendar.current.component(.hour, from: startTime)
@@ -649,6 +657,52 @@ struct DayContext: Codable {
     }
 }
 
+// MARK: - Rejection Memory
+
+/// Represents a dismissed time slot with fingerprint for learning
+struct RejectedTimeSlot: Codable, Identifiable {
+    let id: UUID
+    let date: Date
+    let startTime: Date
+    let endTime: Date
+    let title: String
+    let emoji: String
+    let energy: EnergyType
+    let rejectedAt: Date
+    let reason: String?
+    
+    /// Create a schedule fingerprint for this time slot
+    var scheduleFingerprint: String {
+        let calendar = Calendar.current
+        let hour = calendar.component(.hour, from: startTime)
+        let minute = calendar.component(.minute, from: startTime)
+        let duration = Int(endTime.timeIntervalSince(startTime) / 60)
+        return "\(hour):\(String(format: "%02d", minute))-\(duration)m"
+    }
+    
+    init(
+        id: UUID = UUID(),
+        date: Date,
+        startTime: Date,
+        endTime: Date,
+        title: String,
+        emoji: String,
+        energy: EnergyType,
+        rejectedAt: Date = Date(),
+        reason: String? = nil
+    ) {
+        self.id = id
+        self.date = date
+        self.startTime = startTime
+        self.endTime = endTime
+        self.title = title
+        self.emoji = emoji
+        self.energy = energy
+        self.rejectedAt = rejectedAt
+        self.reason = reason
+    }
+}
+
 // MARK: - App State
 
 /// Complete app state - simple and focused
@@ -660,6 +714,7 @@ struct AppState: Codable {
     var userPatterns: [String] = [] // Simple pattern storage
     var preferences: UserPreferences = UserPreferences()
     var records: [Record] = []
+    var rejectedTimeSlots: [RejectedTimeSlot] = [] // Track dismissed time slots
     
     // XP/XXP System
     var userXP: Int = 0 // Knowledge about user
